@@ -1,18 +1,19 @@
 # src/Pipeline.py
-from pathlib import Path
 import logging
+from pathlib import Path
 
 from src.adapters.DemucsAdapter import DemucsAdapter
-from src.adapters.WhisperXAdapter import WhisperXAdapter
 from src.adapters.GeniusLyricsAdapter import GeniusLyricsAdapter
+from src.adapters.WhisperXAdapter import WhisperXAdapter
 from src.config import load_settings
-from src.domain.SongMetadata import SongMetadata
-from src.services.GeniusLyricsNormalizer import GeniusLyricsNormalizer
+from src.domain.export.LyricsExportStrategy import SRTExportStrategy
 from src.domain.normalization.LyricsNormalizationStrategy import (
     RemoveBracketedAnnotationsStrategy,
 )
+from src.domain.PipelineResult import PipelineResult
+from src.domain.SongMetadata import SongMetadata
+from src.services.GeniusLyricsNormalizer import GeniusLyricsNormalizer
 from src.services.LyricsCorrector import LyricsCorrector
-from src.domain.export.LyricsExportStrategy import SRTExportStrategy
 from src.services.LyricsExportService import LyricsExportService
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ class Pipeline:
             sleep_time_seconds=self.settings.genius_sleep_time_seconds,
         )
 
-    def forward(self) -> Path:
+    def forward(self) -> PipelineResult:
         logger.info("Starting Demucs separation for %s — %s", self.artist, self.title)
 
         demucs_result = self.demucs.run()
@@ -75,7 +76,6 @@ class Pipeline:
         if lyrics is None:
             logger.info("No Genius lyrics found; using WhisperX transcription.")
             final = whisper_result
-            lyrics_source = "whisperx"
         else:
             normalizer = GeniusLyricsNormalizer(
                 [RemoveBracketedAnnotationsStrategy()]
@@ -92,7 +92,6 @@ class Pipeline:
                 "Lyrics correction finished; corrections: %s",
                 final.corrections,
             )
-            lyrics_source = "genius_corrected"
 
         logger.info("Starting WhisperX alignment")
         aligned = self.whisper.align(
@@ -111,9 +110,14 @@ class Pipeline:
 
         logger.info("SRT exported to %s", output_path)
 
-        return output_path
+        return PipelineResult(
+            srt_path=output_path,
+            instrumental_path=Path(demucs_result.instrumental_path),
+            vocals_path=Path(demucs_result.vocals_path),
+        )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     title = "on tha line"
     artist = "yeat"
     language = "en"
@@ -122,4 +126,3 @@ if __name__ == '__main__':
 
     pipeline = Pipeline(title, artist, language, source_path, output_dir)
     pipeline.forward()
-

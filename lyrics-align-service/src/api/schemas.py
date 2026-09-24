@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import Enum
+
 from pydantic import BaseModel
 
 
@@ -15,6 +16,12 @@ class JobCreatedResponse(BaseModel):
     status: JobStatus
 
 
+class JobDownloadUrls(BaseModel):
+    srt: str
+    instrumental: str
+    vocals: str
+
+
 class JobStatusResponse(BaseModel):
     job_id: str
     status: JobStatus
@@ -23,3 +30,4 @@ class JobStatusResponse(BaseModel):
     error: str | None = None
     lyrics_source: str | None = None
     download_url: str | None = None
+    downloads: JobDownloadUrls | None = None

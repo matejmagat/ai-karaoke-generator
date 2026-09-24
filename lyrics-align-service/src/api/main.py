@@ -2,12 +2,18 @@ import asyncio
 import logging
 import shutil
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 
-from src.api.jobs import JobStore
-from src.api.schemas import JobCreatedResponse, JobStatus, JobStatusResponse
+from src.api.jobs import Job, JobStore
+from src.api.schemas import (
+    JobCreatedResponse,
+    JobDownloadUrls,
+    JobStatus,
+    JobStatusResponse,
+)
 from src.pipeline.Pipeline import Pipeline
 
 logging.basicConfig(level=logging.INFO)
@@ -23,8 +29,10 @@ job_store = JobStore(JOBS_DIR)
 
 app = FastAPI(
     title="Lyrics Alignment API",
-    version="0.1.0",
+    version="0.2.0",
 )
+
+ArtifactName = Literal["srt", "instrumental", "vocals"]
 
 
 def allowed_extension(filename: str | None) -> str:
@@ -70,8 +78,13 @@ def execute_pipeline(
             output_dir=output_dir,
         )
 
-        srt_path = pipeline.forward()
-        job_store.set_completed(job_id, srt_path)
+        result = pipeline.forward()
+        job_store.set_completed(
+            job_id,
+            srt_path=result.srt_path,
+            instrumental_path=result.instrumental_path,
+            vocals_path=result.vocals_path,
+        )
 
     except Exception:
         logger.exception("Pipeline failed for job %s", job_id)
@@ -79,6 +92,47 @@ def execute_pipeline(
             job_id,
             "Processing failed. Check server logs for details.",
         )
+
+
+def get_completed_job(job_id: str) -> Job:
+    job = job_store.get(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    if job.status != JobStatus.completed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The job has not completed yet.",
+        )
+
+    return job
+
+
+def build_artifact_response(job_id: str, artifact: ArtifactName) -> FileResponse:
+    job = get_completed_job(job_id)
+    artifacts = {
+        "srt": (job.srt_path, "application/x-subrip", f"{job_id}.srt"),
+        "instrumental": (
+            job.instrumental_path,
+            "audio/wav",
+            f"{job_id}-instrumental.wav",
+        ),
+        "vocals": (job.vocals_path, "audio/wav", f"{job_id}-vocals.wav"),
+    }
+    artifact_path, media_type, filename = artifacts[artifact]
+
+    if artifact_path is None or not artifact_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{artifact.capitalize()} file is no longer available.",
+        )
+
+    return FileResponse(
+        path=artifact_path,
+        media_type=media_type,
+        filename=filename,
+    )
 
 
 @app.get("/health")
@@ -140,8 +194,14 @@ def get_job(job_id: str) -> JobStatusResponse:
         raise HTTPException(status_code=404, detail="Job not found.")
 
     download_url = None
-    if job.status == JobStatus.completed and job.output_path is not None:
+    downloads = None
+    if job.status == JobStatus.completed:
         download_url = f"/jobs/{job.job_id}/download"
+        downloads = JobDownloadUrls(
+            srt=f"/jobs/{job.job_id}/download/srt",
+            instrumental=f"/jobs/{job.job_id}/download/instrumental",
+            vocals=f"/jobs/{job.job_id}/download/vocals",
+        )
 
     return JobStatusResponse(
         job_id=job.job_id,
@@ -150,33 +210,32 @@ def get_job(job_id: str) -> JobStatusResponse:
         completed_at=job.completed_at,
         error=job.error,
         download_url=download_url,
+        downloads=downloads,
     )
 
 
-@app.get("/jobs/{job_id}/download")
+@app.get(
+    "/jobs/{job_id}/download",
+    response_class=FileResponse,
+    responses={200: {"content": {"application/x-subrip": {}}}},
+)
 def download_srt(job_id: str) -> FileResponse:
-    job = job_store.get(job_id)
-
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found.")
-
-    if job.status != JobStatus.completed or job.output_path is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="The job has not completed yet.",
-        )
-
-    if not job.output_path.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Output file is no longer available.",
-        )
-
-    return FileResponse(
-        path=job.output_path,
-        media_type="application/x-subrip",
-        filename=f"{job_id}.srt",
-    )
+    """Download the SRT file using the original backwards-compatible URL."""
+    return build_artifact_response(job_id, "srt")
 
 
-
+@app.get(
+    "/jobs/{job_id}/download/{artifact}",
+    response_class=FileResponse,
+    responses={
+        200: {
+            "content": {
+                "application/x-subrip": {},
+                "audio/wav": {},
+            }
+        }
+    },
+)
+def download_artifact(job_id: str, artifact: ArtifactName) -> FileResponse:
+    """Download the generated SRT, instrumental, or vocals artifact."""
+    return build_artifact_response(job_id, artifact)
