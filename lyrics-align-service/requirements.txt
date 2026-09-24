@@ -1,0 +1,16 @@
+# Install PyTorch separately when CUDA support is required.
+torch
+torchaudio
+
+demucs
+whisperx
+lyricsgenius
+python-dotenv
+jupyterlab
+ipykernel
+librosa
+numpy
+pyloudnorm
+soundfile
+fastapi
+pydantic
