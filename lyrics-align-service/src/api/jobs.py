@@ -4,8 +4,8 @@ from pathlib import Path
 from threading import Lock
 from uuid import uuid4
 
-
 from src.api.schemas import JobStatus
+
 
 @dataclass
 class Job:
@@ -14,7 +14,9 @@ class Job:
     work_dir: Path
     created_at: datetime
     completed_at: datetime | None = None
-    output_path: Path | None = None
+    srt_path: Path | None = None
+    instrumental_path: Path | None = None
+    vocals_path: Path | None = None
     error: str | None = None
 
 
@@ -51,11 +53,19 @@ class JobStore:
         with self._lock:
             self._jobs[job_id].status = JobStatus.processing
 
-    def set_completed(self, job_id: str, output_path: Path) -> None:
+    def set_completed(
+        self,
+        job_id: str,
+        srt_path: Path,
+        instrumental_path: Path,
+        vocals_path: Path,
+    ) -> None:
         with self._lock:
             job = self._jobs[job_id]
             job.status = JobStatus.completed
-            job.output_path = output_path
+            job.srt_path = srt_path
+            job.instrumental_path = instrumental_path
+            job.vocals_path = vocals_path
             job.completed_at = datetime.now(timezone.utc)
 
     def set_failed(self, job_id: str, error: str) -> None:
