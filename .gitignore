@@ -11,6 +11,8 @@ Thumbs.db
 # ============================================================
 /lyrics-align-service/runtime
 /lyrics-align-service/.env
+/lyrics-align-service/testing/input
+/lyrics-align-service/testing/output
 
 /lyrics-align-service/**/__pycache__/
 /lyrics-align-service/**/*.py[cod]
