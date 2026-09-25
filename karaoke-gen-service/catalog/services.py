@@ -108,10 +108,10 @@ class LyricsAlignClient:
 def complete_song_import(*, job_id, title, artist, user_id):
     close_old_connections()
     client = LyricsAlignClient()
-    downloads = client.wait_for_completion(job_id)
     saved_files = []
 
     try:
+        downloads = client.wait_for_completion(job_id)
         with ExitStack() as stack:
             artifacts = {}
             for artifact in ("srt", "instrumental", "vocals"):
