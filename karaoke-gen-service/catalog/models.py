@@ -113,7 +113,12 @@ class SongProcessingJob(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-        indexes = [models.Index(fields=["owner", "status"])]
+        indexes = [
+            models.Index(
+                fields=["owner", "status"],
+                name="catalog_son_owner_i_073d6f_idx",
+            )
+        ]
 
     def __str__(self):
         return f"{self.job_id}: {self.status}"
