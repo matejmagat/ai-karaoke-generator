@@ -40,18 +40,13 @@ TEMPLATES = [
         'DIRS': [],
         'APP_DIRS': True,
         'OPTIONS': {
-            'context_processors': {
-                'request': 'django.template.context_processors.request',
-            },
+            'context_processors': [
+                'django.template.context_processors.request',
+                'django.contrib.auth.context_processors.auth',
+                'django.contrib.messages.context_processors.messages',
+            ],
         },
     },
-]
-
-# Keep the standard context processor layout expected by Django admin.
-TEMPLATES[0]['OPTIONS']['context_processors'] = [
-    'django.template.context_processors.request',
-    'django.contrib.auth.context_processors.auth',
-    'django.contrib.messages.context_processors.messages',
 ]
 
 WSGI_APPLICATION = 'config.wsgi.application'

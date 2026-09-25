@@ -7,6 +7,7 @@ from typing import Literal
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 
+from src.adapters.WhisperXAdapter import release_cuda_memory
 from src.api.jobs import Job, JobStore
 from src.api.schemas import (
     JobCreatedResponse,
@@ -56,6 +57,7 @@ def execute_pipeline(
 ) -> None:
     job_store.set_processing(job_id)
     pipeline = None
+    release_cuda_memory()
     try:
         pipeline = Pipeline(
             title=title,
@@ -80,6 +82,7 @@ def execute_pipeline(
     finally:
         if pipeline is not None:
             pipeline.close()
+        release_cuda_memory()
 
 
 def get_completed_job(job_id: str) -> Job:

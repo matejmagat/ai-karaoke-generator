@@ -15,6 +15,16 @@ from src.domain.Transcription import (
 )
 
 
+def release_cuda_memory() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        try:
+            torch.cuda.ipc_collect()
+        except RuntimeError:
+            pass
+
+
 class WhisperXAdapter:
     def __init__(
         self,
@@ -53,10 +63,8 @@ class WhisperXAdapter:
         )
 
     def release_transcription_model(self) -> None:
-        model = self.model
         self.model = None
-        del model
-        self._release_cuda_memory()
+        release_cuda_memory()
 
     def align(
         self,
@@ -115,16 +123,7 @@ class WhisperXAdapter:
     def close(self) -> None:
         self.model = None
         self._alignment_models.clear()
-        self._release_cuda_memory()
-
-    def _release_cuda_memory(self) -> None:
-        gc.collect()
-        if self.device == "cuda" and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            try:
-                torch.cuda.ipc_collect()
-            except RuntimeError:
-                pass
+        release_cuda_memory()
 
     def _get_alignment_model(
         self,
