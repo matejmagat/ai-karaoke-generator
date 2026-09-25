@@ -1,8 +1,10 @@
+from django.db.models import Q
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from .models import Song, SongProcessingJob
+from .permissions import IsSongOwnerOrAdminOrReadOnly
 from .serializers import (
     SongCreateSerializer,
     SongProcessingJobSerializer,
@@ -14,7 +16,10 @@ from .services import LyricsAlignClient, LyricsAlignServiceError, enqueue_song_i
 class SongViewSet(viewsets.ModelViewSet):
     queryset = Song.objects.all().order_by("artist", "title")
     serializer_class = SongSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    permission_classes = [
+        permissions.IsAuthenticatedOrReadOnly,
+        IsSongOwnerOrAdminOrReadOnly,
+    ]
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -27,7 +32,11 @@ class SongViewSet(viewsets.ModelViewSet):
         if user.is_staff:
             return Song.objects.all().order_by("artist", "title")
 
-        return Song.objects.filter(is_public=True).order_by("artist", "title")
+        visible_songs = Q(is_public=True)
+        if user.is_authenticated:
+            visible_songs |= Q(uploaded_by=user)
+
+        return Song.objects.filter(visible_songs).order_by("artist", "title")
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
