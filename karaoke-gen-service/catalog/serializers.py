@@ -51,7 +51,9 @@ class SongCreateSerializer(serializers.Serializer):
 
 
 class SongProcessingJobSerializer(serializers.ModelSerializer):
-    song_id = serializers.UUIDField(source="song.id", read_only=True)
+    # Read the nullable foreign-key column directly. Using source="song.id"
+    # causes DRF to omit the field while no Song has been created yet.
+    song_id = serializers.UUIDField(read_only=True, allow_null=True)
 
     class Meta:
         model = SongProcessingJob
