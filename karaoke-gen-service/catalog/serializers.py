@@ -2,7 +2,7 @@ from pathlib import Path
 
 from rest_framework import serializers
 
-from .models import Song
+from .models import Song, SongProcessingJob
 
 
 class SongSerializer(serializers.ModelSerializer):
@@ -48,3 +48,21 @@ class SongCreateSerializer(serializers.Serializer):
         if value.size == 0:
             raise serializers.ValidationError("The uploaded audio file is empty.")
         return value
+
+
+class SongProcessingJobSerializer(serializers.ModelSerializer):
+    song_id = serializers.UUIDField(source="song.id", read_only=True)
+
+    class Meta:
+        model = SongProcessingJob
+        fields = [
+            "job_id",
+            "status",
+            "error",
+            "song_id",
+            "title",
+            "artist",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields

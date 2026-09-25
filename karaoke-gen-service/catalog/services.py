@@ -13,7 +13,7 @@ from django.db.models import Max
 
 from library.models import Library, LibrarySong
 
-from .models import Song
+from .models import Song, SongProcessingJob
 
 logger = logging.getLogger(__name__)
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="song-import")
@@ -53,7 +53,7 @@ class LyricsAlignClient:
                 "Could not create a lyrics alignment job."
             ) from exc
 
-    def wait_for_completion(self, job_id):
+    def wait_for_completion(self, job_id, status_callback=None):
         deadline = time.monotonic() + self.job_timeout
 
         while time.monotonic() < deadline:
@@ -70,6 +70,9 @@ class LyricsAlignClient:
                 ) from exc
 
             job_status = payload.get("status")
+            if status_callback is not None:
+                status_callback(job_status, payload.get("error") or "")
+
             if job_status == "failed":
                 raise LyricsAlignServiceError(
                     payload.get("error") or f"Lyrics alignment job {job_id} failed."
@@ -105,13 +108,28 @@ class LyricsAlignClient:
             ) from exc
 
 
-def complete_song_import(*, job_id, title, artist, user_id):
+def _update_job_status(job_id, job_status, error=""):
+    valid_statuses = {choice for choice, _ in SongProcessingJob.Status.choices}
+    if job_status in valid_statuses:
+        SongProcessingJob.objects.filter(pk=job_id).update(
+            status=job_status,
+            error=error,
+        )
+
+
+def complete_song_import(*, processing_job_id):
     close_old_connections()
     client = LyricsAlignClient()
     saved_files = []
 
     try:
-        downloads = client.wait_for_completion(job_id)
+        job = SongProcessingJob.objects.get(pk=processing_job_id)
+        downloads = client.wait_for_completion(
+            job.job_id,
+            status_callback=lambda job_status, error: _update_job_status(
+                job.job_id, job_status, error
+            ),
+        )
         with ExitStack() as stack:
             artifacts = {}
             for artifact in ("srt", "instrumental", "vocals"):
@@ -120,10 +138,13 @@ def complete_song_import(*, job_id, title, artist, user_id):
                 artifacts[artifact] = stream
 
             with transaction.atomic():
+                job = SongProcessingJob.objects.select_for_update().get(
+                    pk=processing_job_id
+                )
                 song = Song(
-                    title=title,
-                    artist=artist,
-                    uploaded_by_id=user_id,
+                    title=job.title,
+                    artist=job.artist,
+                    uploaded_by=job.owner,
                     processing_status=Song.ProcessingStatus.READY,
                 )
                 song.lyrics_srt_file.save(
@@ -143,7 +164,7 @@ def complete_song_import(*, job_id, title, artist, user_id):
                 song.save()
 
                 library, _ = Library.objects.get_or_create(
-                    owner_id=user_id,
+                    owner=job.owner,
                     name="My Library",
                 )
                 library = Library.objects.select_for_update().get(pk=library.pk)
@@ -155,6 +176,10 @@ def complete_song_import(*, job_id, title, artist, user_id):
                     song=song,
                     position=(maximum or 0) + 1,
                 )
+                job.song = song
+                job.status = SongProcessingJob.Status.COMPLETED
+                job.error = ""
+                job.save(update_fields=["song", "status", "error", "updated_at"])
                 return song
     except Exception:
         for storage, name in saved_files:
@@ -167,8 +192,15 @@ def complete_song_import(*, job_id, title, artist, user_id):
 def _run_song_import(**kwargs):
     try:
         complete_song_import(**kwargs)
-    except Exception:
-        logger.exception("Could not import completed lyrics job %s", kwargs["job_id"])
+    except Exception as exc:
+        job_id = kwargs["processing_job_id"]
+        SongProcessingJob.objects.filter(pk=job_id).update(
+            status=SongProcessingJob.Status.FAILED,
+            error=str(exc),
+        )
+        logger.exception("Could not import completed lyrics job %s", job_id)
+    finally:
+        close_old_connections()
 
 
 def enqueue_song_import(**kwargs):

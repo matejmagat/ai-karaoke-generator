@@ -1,4 +1,3 @@
-from django.db import models
 import uuid
 
 from django.conf import settings
@@ -18,31 +17,26 @@ class Song(models.Model):
         FAILED = "failed", "Failed"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-
     title = models.CharField(max_length=255)
     artist = models.CharField(max_length=255, blank=True)
-
     vocals_file = models.FileField(
         upload_to=song_upload_path,
         blank=True,
         null=True,
         validators=[FileExtensionValidator(["mp3", "wav", "flac", "m4a", "ogg"])],
     )
-
     instrumental_file = models.FileField(
         upload_to=song_upload_path,
         blank=True,
         null=True,
         validators=[FileExtensionValidator(["mp3", "wav", "flac", "m4a", "ogg"])],
     )
-
     lyrics_srt_file = models.FileField(
         upload_to=song_upload_path,
         blank=True,
         null=True,
         validators=[FileExtensionValidator(["srt"])],
     )
-
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -50,25 +44,21 @@ class Song(models.Model):
         null=True,
         blank=True,
     )
-
     processing_status = models.CharField(
         max_length=20,
         choices=ProcessingStatus.choices,
         default=ProcessingStatus.PENDING,
     )
     processing_error = models.TextField(blank=True)
-
     duration_seconds = models.PositiveIntegerField(
         null=True,
         blank=True,
         help_text="Duration of the playable karaoke track.",
     )
-
     is_public = models.BooleanField(
         default=False,
         help_text="Whether non-admin users may browse and add this song.",
     )
-
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -88,3 +78,42 @@ class Song(models.Model):
 
     def __str__(self):
         return f"{self.artist} — {self.title}" if self.artist else self.title
+
+
+class SongProcessingJob(models.Model):
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        PROCESSING = "processing", "Processing"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    job_id = models.CharField(max_length=64, primary_key=True)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="song_processing_jobs",
+    )
+    title = models.CharField(max_length=255)
+    artist = models.CharField(max_length=255)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.QUEUED,
+    )
+    error = models.TextField(blank=True)
+    song = models.OneToOneField(
+        Song,
+        on_delete=models.SET_NULL,
+        related_name="processing_job",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["owner", "status"])]
+
+    def __str__(self):
+        return f"{self.job_id}: {self.status}"

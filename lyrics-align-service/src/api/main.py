@@ -21,41 +21,28 @@ logger = logging.getLogger(__name__)
 
 RUNTIME_DIR = Path("runtime")
 JOBS_DIR = RUNTIME_DIR / "jobs"
-
-# Start with one job at a time: Demucs + WhisperX commonly compete for GPU memory.
 pipeline_semaphore = asyncio.Semaphore(1)
-
 job_store = JobStore(JOBS_DIR)
-
-app = FastAPI(
-    title="Lyrics Alignment API",
-    version="0.2.0",
-)
-
+app = FastAPI(title="Lyrics Alignment API", version="0.2.0")
 ArtifactName = Literal["srt", "instrumental", "vocals"]
 
 
 def allowed_extension(filename: str | None) -> str:
     extension = Path(filename or "").suffix.lower()
-
     allowed = {".mp3", ".wav", ".flac", ".m4a", ".ogg"}
-
     if extension not in allowed:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"Unsupported audio extension. Allowed: {', '.join(sorted(allowed))}",
         )
-
     return extension
 
 
 async def save_upload(upload: UploadFile, destination: Path) -> None:
-    chunk_size = 1024 * 1024  # 1 MB
-
+    chunk_size = 1024 * 1024
     with destination.open("wb") as output_file:
         while chunk := await upload.read(chunk_size):
             output_file.write(chunk)
-
     await upload.close()
 
 
@@ -68,7 +55,7 @@ def execute_pipeline(
     output_dir: Path,
 ) -> None:
     job_store.set_processing(job_id)
-
+    pipeline = None
     try:
         pipeline = Pipeline(
             title=title,
@@ -77,7 +64,6 @@ def execute_pipeline(
             source_path=input_path,
             output_dir=output_dir,
         )
-
         result = pipeline.forward()
         job_store.set_completed(
             job_id,
@@ -85,27 +71,26 @@ def execute_pipeline(
             instrumental_path=result.instrumental_path,
             vocals_path=result.vocals_path,
         )
-
     except Exception:
         logger.exception("Pipeline failed for job %s", job_id)
         job_store.set_failed(
             job_id,
             "Processing failed. Check server logs for details.",
         )
+    finally:
+        if pipeline is not None:
+            pipeline.close()
 
 
 def get_completed_job(job_id: str) -> Job:
     job = job_store.get(job_id)
-
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
-
     if job.status != JobStatus.completed:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="The job has not completed yet.",
         )
-
     return job
 
 
@@ -121,13 +106,11 @@ def build_artifact_response(job_id: str, artifact: ArtifactName) -> FileResponse
         "vocals": (job.vocals_path, "audio/wav", f"{job_id}-vocals.wav"),
     }
     artifact_path, media_type, filename = artifacts[artifact]
-
     if artifact_path is None or not artifact_path.is_file():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"{artifact.capitalize()} file is no longer available.",
         )
-
     return FileResponse(
         path=artifact_path,
         media_type=media_type,
@@ -152,11 +135,9 @@ async def create_job(
     audio: UploadFile = File(...),
 ) -> JobCreatedResponse:
     extension = allowed_extension(audio.filename)
-
     job = job_store.create()
     input_path = job.work_dir / f"input{extension}"
     output_dir = job.work_dir / "output"
-
     try:
         await save_upload(audio, input_path)
     except Exception:
@@ -179,17 +160,12 @@ async def create_job(
             )
 
     asyncio.create_task(run_job())
-
-    return JobCreatedResponse(
-        job_id=job.job_id,
-        status=JobStatus.queued,
-    )
+    return JobCreatedResponse(job_id=job.job_id, status=JobStatus.queued)
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
 def get_job(job_id: str) -> JobStatusResponse:
     job = job_store.get(job_id)
-
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
 
@@ -202,7 +178,6 @@ def get_job(job_id: str) -> JobStatusResponse:
             instrumental=f"/jobs/{job.job_id}/download/instrumental",
             vocals=f"/jobs/{job.job_id}/download/vocals",
         )
-
     return JobStatusResponse(
         job_id=job.job_id,
         status=job.status,
@@ -220,7 +195,6 @@ def get_job(job_id: str) -> JobStatusResponse:
     responses={200: {"content": {"application/x-subrip": {}}}},
 )
 def download_srt(job_id: str) -> FileResponse:
-    """Download the SRT file using the original backwards-compatible URL."""
     return build_artifact_response(job_id, "srt")
 
 
@@ -237,5 +211,4 @@ def download_srt(job_id: str) -> FileResponse:
     },
 )
 def download_artifact(job_id: str, artifact: ArtifactName) -> FileResponse:
-    """Download the generated SRT, instrumental, or vocals artifact."""
     return build_artifact_response(job_id, artifact)
