@@ -70,10 +70,9 @@ class LyricsAlignClient:
                 ) from exc
 
             job_status = payload.get("status")
-            if status_callback is not None:
-                status_callback(job_status, payload.get("error") or "")
-
             if job_status == "failed":
+                if status_callback is not None:
+                    status_callback(job_status, payload.get("error") or "")
                 raise LyricsAlignServiceError(
                     payload.get("error") or f"Lyrics alignment job {job_id} failed."
                 )
@@ -85,6 +84,8 @@ class LyricsAlignClient:
                 }
                 return {key: downloads.get(key, value) for key, value in defaults.items()}
 
+            if status_callback is not None:
+                status_callback(job_status, payload.get("error") or "")
             time.sleep(self.poll_interval)
 
         raise LyricsAlignServiceError(
