@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,16 @@ from src.domain.Transcription import (
     TranscriptSegment,
     WordSegment,
 )
-from src.services.VocalsNormalizer import VocalsNormalizer
+
+
+def release_cuda_memory() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        try:
+            torch.cuda.ipc_collect()
+        except RuntimeError:
+            pass
 
 
 class WhisperXAdapter:
@@ -25,36 +35,36 @@ class WhisperXAdapter:
     ) -> None:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.compute_type = "float16" if self.device == "cuda" else "int8"
-
         self.language = language
         self.model_name = model_name
         self.batch_size = batch_size
-
         self.model = whisperx.load_model(
             self.model_name,
             device=self.device,
             compute_type=self.compute_type,
             language=self.language,
         )
-
         self._alignment_models: dict[str, tuple[Any, dict[str, Any]]] = {}
 
     def transcribe(self, vocals_path: str | Path) -> Transcription:
+        if self.model is None:
+            raise RuntimeError("The WhisperX transcription model has been released.")
         audio = whisperx.load_audio(str(vocals_path))
-
         raw_result = self.model.transcribe(
             audio,
             batch_size=self.batch_size,
             language=self.language,
         )
-
         language = raw_result.get("language") or self.language
-
         return self._to_transcription(
             raw_segments=raw_result.get("segments", []),
             language=language,
             include_words=False,
         )
+
+    def release_transcription_model(self) -> None:
+        self.model = None
+        release_cuda_memory()
 
     def align(
         self,
@@ -62,20 +72,13 @@ class WhisperXAdapter:
         transcription: Transcription,
     ) -> Transcription:
         language = transcription.language or self.language
-
         if language is None:
             raise ValueError(
                 "Cannot align lyrics because no language was provided or detected."
             )
-
         audio = whisperx.load_audio(str(vocals_path))
-
         align_model, align_metadata = self._get_alignment_model(language)
-
-        raw_segments = self._to_whisperx_alignment_segments(
-            transcription.segments
-        )
-
+        raw_segments = self._to_whisperx_alignment_segments(transcription.segments)
         aligned_result = whisperx.align(
             transcript=raw_segments,
             model=align_model,
@@ -84,7 +87,6 @@ class WhisperXAdapter:
             device=self.device,
             return_char_alignments=False,
         )
-
         return self._to_transcription(
             raw_segments=aligned_result.get("segments", []),
             language=language,
@@ -102,7 +104,6 @@ class WhisperXAdapter:
                 "The number of corrected lyric segments must equal the number "
                 "of initial transcription segments."
             )
-
         corrected_segments = [
             replace(segment, text=corrected_text.strip())
             for segment, corrected_text in zip(
@@ -111,16 +112,18 @@ class WhisperXAdapter:
                 strict=True,
             )
         ]
-
-        corrected_transcription = replace(
-            initial_transcription,
-            segments=corrected_segments,
-        )
-
         return self.align(
             vocals_path=vocals_path,
-            transcription=corrected_transcription,
+            transcription=replace(
+                initial_transcription,
+                segments=corrected_segments,
+            ),
         )
+
+    def close(self) -> None:
+        self.model = None
+        self._alignment_models.clear()
+        release_cuda_memory()
 
     def _get_alignment_model(
         self,
@@ -131,7 +134,6 @@ class WhisperXAdapter:
                 language_code=language,
                 device=self.device,
             )
-
         return self._alignment_models[language]
 
     def _to_transcription(
@@ -141,22 +143,17 @@ class WhisperXAdapter:
         include_words: bool,
     ) -> Transcription:
         segments: list[TranscriptSegment] = []
-
         for index, raw_segment in enumerate(raw_segments):
             text = str(raw_segment.get("text", "")).strip()
-
             start_ms = self._seconds_to_ms(raw_segment.get("start"))
             end_ms = self._seconds_to_ms(raw_segment.get("end"))
-
             if start_ms is None or end_ms is None:
                 continue
-
             words = (
                 self._to_word_segments(raw_segment.get("words", []))
                 if include_words
                 else None
             )
-
             segments.append(
                 TranscriptSegment(
                     index=index,
@@ -167,7 +164,6 @@ class WhisperXAdapter:
                     words=words,
                 )
             )
-
         return Transcription(
             language=language,
             segments=segments,
@@ -180,17 +176,12 @@ class WhisperXAdapter:
         raw_words: list[dict[str, Any]],
     ) -> list[WordSegment]:
         words: list[WordSegment] = []
-
         for raw_word in raw_words:
             word_text = str(
-                raw_word.get("word")
-                or raw_word.get("text")
-                or ""
+                raw_word.get("word") or raw_word.get("text") or ""
             ).strip()
-
             if not word_text:
                 continue
-
             words.append(
                 WordSegment(
                     word=word_text,
@@ -199,46 +190,34 @@ class WhisperXAdapter:
                     confidence=self._read_confidence(raw_word),
                 )
             )
-
         return words
 
     def _to_whisperx_alignment_segments(
         self,
         segments: list[TranscriptSegment],
     ) -> list[dict[str, float | str]]:
-        alignment_segments: list[dict[str, float | str]] = []
-
-        for segment in segments:
-            normalized_text = segment.text.strip()
-
-            if not normalized_text:
-                continue
-
-            alignment_segments.append(
-                {
-                    "start": segment.start_ms / 1000.0,
-                    "end": segment.end_ms / 1000.0,
-                    "text": normalized_text,
-                }
-            )
-
+        alignment_segments = [
+            {
+                "start": segment.start_ms / 1000.0,
+                "end": segment.end_ms / 1000.0,
+                "text": segment.text.strip(),
+            }
+            for segment in segments
+            if segment.text.strip()
+        ]
         if not alignment_segments:
             raise ValueError("No non-empty segments are available for alignment.")
-
         return alignment_segments
 
     @staticmethod
     def _seconds_to_ms(value: Any) -> int | None:
         if value is None:
             return None
-
         return round(float(value) * 1000)
 
     @staticmethod
     def _read_confidence(raw_item: dict[str, Any]) -> float | None:
         value = raw_item.get("score")
-
         if value is None:
             value = raw_item.get("confidence")
-
         return float(value) if value is not None else None
