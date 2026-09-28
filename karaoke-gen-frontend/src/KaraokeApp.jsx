@@ -1,27 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import './KaraokeApp.css';
 
-const INITIAL_LYRICS = [
-  { id: 1, start: 3.142, end: 3.462, text: 'Your' },
-  { id: 2, start: 3.762, end: 4.243, text: 'eyes' },
-  { id: 3, start: 4.363, end: 5.183, text: 'blue' },
-  { id: 4, start: 5.223, end: 5.323, text: 'look' },
-  { id: 5, start: 5.523, end: 6.344, text: 'away' },
-  { id: 6, start: 6.444, end: 6.644, text: 'But' },
-  { id: 7, start: 6.764, end: 8.085, text: 'I knew' },
-  { id: 8, start: 8.165, end: 8.485, text: 'if I stared' },
-  { id: 9, start: 8.505, end: 9.126, text: 'for too long' },
-  { id: 10, start: 9.206, end: 10.647, text: 'I could get lost' },
-  { id: 11, start: 10.767, end: 12.928, text: 'I got to have you' },
-  { id: 12, start: 13.628, end: 15.47, text: 'At all costs' },
-  { id: 13, start: 15.57, end: 17.931, text: 'I miss your hand holding mine' },
-  { id: 14, start: 18.752, end: 22.294, text: "I feel like I'm standing in a line" },
-  { id: 15, start: 28.075, end: 30.757, text: 'I miss your writing on my spine' },
-  { id: 16, start: 31.138, end: 35.461, text: "I feel like I'm the oenophile and you're my favourite wine" },
-  { id: 17, start: 35.541, end: 41.006, text: "High on the smoke nine, this is for what I'm designed" },
-  { id: 18, start: 41.126, end: 49.833, text: 'To be on the skyline' },
-];
-
+const INITIAL_LYRICS = [];
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const formatTime = (seconds = 0) => {
   if (!Number.isFinite(seconds)) return '0:00';
@@ -55,19 +35,19 @@ export default function KaraokeApp() {
   const instrumentalRef = useRef(null);
   const vocalRef = useRef(null);
   const rafRef = useRef(null);
-  const objectUrls = useRef([]);
 
+  const [title, setTitle] = useState('');
+  const [artist, setArtist] = useState('');
+  const [language, setLanguage] = useState('en');
+  const [sourceFile, setSourceFile] = useState(null);
   const [lyrics, setLyrics] = useState(INITIAL_LYRICS);
-  const [instrumentalName, setInstrumentalName] = useState('No instrumental selected');
-  const [vocalName, setVocalName] = useState('No vocal stem selected');
-  const [srtName, setSrtName] = useState('lyrics_aligned.srt');
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [master, setMaster] = useState(80);
   const [instrumentalVolume, setInstrumentalVolume] = useState(100);
   const [vocalVolume, setVocalVolume] = useState(65);
-  const [status, setStatus] = useState('Load your separated stems to start singing.');
+  const [status, setStatus] = useState('Enter song details and choose a full mix.');
 
   const currentCueIndex = useMemo(() => {
     const active = lyrics.findIndex((cue) => currentTime >= cue.start && currentTime < cue.end);
@@ -80,13 +60,9 @@ export default function KaraokeApp() {
   const previousCue = currentCueIndex > 0 ? lyrics[currentCueIndex - 1] : null;
   const nextCue = currentCueIndex >= 0 && currentCueIndex < lyrics.length - 1 ? lyrics[currentCueIndex + 1] : null;
 
-  const applyVolumes = () => {
+  useEffect(() => {
     if (instrumentalRef.current) instrumentalRef.current.volume = (master / 100) * (instrumentalVolume / 100);
     if (vocalRef.current) vocalRef.current.volume = (master / 100) * (vocalVolume / 100);
-  };
-
-  useEffect(() => {
-    applyVolumes();
   }, [master, instrumentalVolume, vocalVolume]);
 
   const syncClock = () => {
@@ -105,40 +81,10 @@ export default function KaraokeApp() {
     setCurrentTime(safeTime);
   };
 
-  const handleAudioFile = (event, type) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    objectUrls.current.push(url);
-    const audio = type === 'instrumental' ? instrumentalRef.current : vocalRef.current;
-    if (audio) {
-      audio.src = url;
-      audio.load();
-    }
-    if (type === 'instrumental') setInstrumentalName(file.name);
-    else setVocalName(file.name);
-    setStatus(`${type === 'instrumental' ? 'Instrumental' : 'Vocal stem'} loaded: ${file.name}`);
-  };
-
-  const handleSrtFile = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    try {
-      const parsed = parseSrt(await file.text());
-      if (!parsed.length) throw new Error('No usable SRT cues were found.');
-      setLyrics(parsed);
-      setSrtName(file.name);
-      setStatus(`Imported ${parsed.length} lyric cues from ${file.name}.`);
-      seekAll(0);
-    } catch (error) {
-      setStatus(error.message || 'Unable to parse this subtitle file.');
-    }
-  };
-
   const togglePlayback = async () => {
     const sources = [instrumentalRef.current, vocalRef.current].filter((audio) => audio?.src);
     if (!sources.length) {
-      setStatus('Choose at least one audio stem before pressing play.');
+      setStatus('Generate a song before pressing play.');
       return;
     }
     try {
@@ -154,7 +100,7 @@ export default function KaraokeApp() {
         rafRef.current = requestAnimationFrame(syncClock);
       }
     } catch {
-      setStatus('The browser could not start playback. Try loading audio again.');
+      setStatus('The browser could not start playback. Reload the generated audio.');
       setIsPlaying(false);
     }
   };
@@ -172,10 +118,9 @@ export default function KaraokeApp() {
     setDuration(tracks.length ? Math.max(...tracks.map((audio) => audio.duration)) : 0);
   };
 
-  useEffect(() => () => {
-    cancelAnimationFrame(rafRef.current);
-    objectUrls.current.forEach(URL.revokeObjectURL);
-  }, []);
+  const generationReady = title.trim() && artist.trim() && language.trim() && sourceFile;
+
+  useEffect(() => () => cancelAnimationFrame(rafRef.current), []);
 
   return (
     <main className="karaoke-app">
@@ -184,33 +129,28 @@ export default function KaraokeApp() {
 
       <header className="topbar">
         <div className="brand"><span className="brand-mark">♫</span><span>Karaoke<span className="accent">Gen</span></span></div>
-        <p>Two stems. One performance.</p>
+        <p>One song in. Your karaoke mix out.</p>
       </header>
 
       <section className="workspace">
         <aside className="panel setup-panel">
           <div className="panel-heading">
-            <div><span className="eyebrow">Session</span><h2>Source files</h2></div>
-            <span className="ready-dot" title="Ready" />
+            <div><span className="eyebrow">Generator</span><h2>Source song</h2></div>
+            <span className="ready-dot" title={generationReady ? 'Ready' : 'Details required'} />
           </div>
 
-          <label className="upload-card">
-            <span className="upload-icon">◫</span>
-            <span><strong>Instrumental</strong><small>{instrumentalName}</small></span>
-            <input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.aac,.flac" onChange={(event) => handleAudioFile(event, 'instrumental')} />
-          </label>
-          <label className="upload-card">
-            <span className="upload-icon">♬</span>
-            <span><strong>Guide vocals</strong><small>{vocalName}</small></span>
-            <input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.aac,.flac" onChange={(event) => handleAudioFile(event, 'vocal')} />
-          </label>
-          <label className="upload-card lyric-upload">
-            <span className="upload-icon">≡</span>
-            <span><strong>Timed lyrics</strong><small>{srtName}</small></span>
-            <input type="file" accept=".srt,text/srt,application/x-subrip" onChange={handleSrtFile} />
+          <label className="field-label">Title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Song title" /></label>
+          <label className="field-label">Artist<input value={artist} onChange={(event) => setArtist(event.target.value)} placeholder="Artist name" /></label>
+          <label className="field-label">Language<input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="en" pattern="[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?" /></label>
+
+          <label className="upload-card source-upload">
+            <span className="upload-icon">♪</span>
+            <span><strong>Full mix</strong><small>{sourceFile?.name || 'Choose an MP3 or WAV file'}</small></span>
+            <input type="file" accept=".mp3,.wav,audio/mpeg,audio/wav" onChange={(event) => setSourceFile(event.target.files?.[0] || null)} />
           </label>
 
-          <div className="format-note">Browser-supported audio only · SRT timestamps drive the lyric display</div>
+          <button className="generate-button" disabled={!generationReady} onClick={() => setStatus('Song details are ready to submit.')}>Generate karaoke track</button>
+          <div className="format-note">MP3 or WAV · language uses a code such as en, hr, or en-US</div>
 
           <div className="mixer">
             <div className="panel-heading compact"><div><span className="eyebrow">Mix</span><h2>Levels</h2></div><button className="text-button" onClick={() => { setMaster(80); setInstrumentalVolume(100); setVocalVolume(65); }}>Reset</button></div>
@@ -225,8 +165,8 @@ export default function KaraokeApp() {
           <span className="stage-label">Live lyric view</span>
           <div className="lyrics-display" aria-live="polite">
             <p className="nearby previous">{previousCue?.text || ' '}</p>
-            <p className="active-lyric">{currentCue?.text || 'Load audio and press play'}</p>
-            <p className="nearby next">{nextCue?.text || 'Your lyrics will appear here in time'}</p>
+            <p className="active-lyric">{currentCue?.text || 'Generate a song to begin'}</p>
+            <p className="nearby next">{nextCue?.text || 'Synchronized lyrics will appear here'}</p>
           </div>
           <div className="cue-pill"><span className="pulse" /> Cue {currentCueIndex >= 0 ? currentCueIndex + 1 : 0} of {lyrics.length}</div>
         </section>
