@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { createSong, getProcessingJob, getSong, mediaUrl } from './api';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createSong, getLibraries, getProcessingJob, getSong, mediaUrl } from './api';
 import KaraokeTabs from './KaraokeTabs';
 import { GenerationForm, PlayerView } from './KaraokeViews';
+import LibraryView from './LibraryView';
 import './KaraokeApp.css';
 
 const ACTIVE_JOB_STATES = ['queued', 'processing'];
@@ -13,13 +14,11 @@ const formatTime = (seconds = 0) => {
   const secs = Math.floor(seconds % 60).toString().padStart(2, '0');
   return `${mins}:${secs}`;
 };
-
 function parseTimestamp(timestamp) {
   const [hours, minutes, rest] = timestamp.trim().split(':');
   const [seconds, milliseconds = '0'] = rest.replace('.', ',').split(',');
   return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds) + Number(milliseconds.padEnd(3, '0').slice(0, 3)) / 1000;
 }
-
 export function parseSrt(source) {
   const normalized = source.replace(/^\uFEFF/, '').replace(/\r/g, '').trim();
   if (!normalized) return [];
@@ -32,11 +31,8 @@ export function parseSrt(source) {
     return text && Number.isFinite(start) && Number.isFinite(end) ? { id: index + 1, start, end, text } : null;
   }).filter(Boolean);
 }
-
 export function errorMessage(error) {
-  if (error.status === 400 && error.body) {
-    return Object.entries(error.body).map(([field, messages]) => `${field.replaceAll('_', ' ')}: ${[].concat(messages).join(' ')}`).join(' ');
-  }
+  if (error.status === 400 && error.body) return Object.entries(error.body).map(([field, messages]) => `${field.replaceAll('_', ' ')}: ${[].concat(messages).join(' ')}`).join(' ');
   if (error.status === 404) return 'This processing job is no longer available.';
   if (error.status === 502) return 'The audio processing service is unavailable. Please retry.';
   return error.message || 'Generation failed. Please retry.';
@@ -55,6 +51,9 @@ export default function KaraokeApp() {
   const [job, setJob] = useState(null);
   const [song, setSong] = useState(null);
   const [generationError, setGenerationError] = useState('');
+  const [libraries, setLibraries] = useState([]);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState('');
   const [lyrics, setLyrics] = useState([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -63,6 +62,23 @@ export default function KaraokeApp() {
   const [instrumentalVolume, setInstrumentalVolume] = useState(100);
   const [vocalVolume, setVocalVolume] = useState(65);
   const [status, setStatus] = useState('Choose a song from your library.');
+
+  const refreshLibraries = useCallback(async (signal) => {
+    setLibraryLoading(true); setLibraryError('');
+    try {
+      const result = await getLibraries(signal);
+      setLibraries(Array.isArray(result) ? result : result.results || []);
+    } catch (error) {
+      if (error.name !== 'AbortError') setLibraryError(errorMessage(error));
+    } finally {
+      if (!signal?.aborted) setLibraryLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    refreshLibraries(controller.signal);
+    return () => controller.abort();
+  }, [refreshLibraries]);
 
   const currentCueIndex = useMemo(() => {
     const active = lyrics.findIndex((cue) => currentTime >= cue.start && currentTime < cue.end);
@@ -82,28 +98,17 @@ export default function KaraokeApp() {
   useEffect(() => {
     const jobId = job?.job_id;
     if (!jobId) return undefined;
-    const controller = new AbortController();
-    let timer;
-    let stopped = false;
+    const controller = new AbortController(); let timer; let stopped = false;
     const poll = async () => {
       try {
         const next = await getProcessingJob(jobId, controller.signal);
         if (stopped) return;
         setJob(next);
-        if (next.status === 'failed') {
-          setGenerationError(next.error || 'Song processing failed.');
-          setStatus('Generation failed.');
-        } else if (next.status === 'completed') {
-          setStatus('Processing complete. Loading generated song…');
-        } else {
-          setStatus(next.status === 'queued' ? 'Generation queued…' : 'Separating stems and aligning lyrics…');
-          timer = setTimeout(poll, POLL_INTERVAL_MS);
-        }
+        if (next.status === 'failed') { setGenerationError(next.error || 'Song processing failed.'); setStatus('Generation failed.'); }
+        else if (next.status === 'completed') setStatus('Processing complete. Loading generated song…');
+        else { setStatus(next.status === 'queued' ? 'Generation queued…' : 'Separating stems and aligning lyrics…'); timer = setTimeout(poll, POLL_INTERVAL_MS); }
       } catch (error) {
-        if (!stopped && error.name !== 'AbortError') {
-          setGenerationError(errorMessage(error));
-          setStatus('Could not check generation status.');
-        }
+        if (!stopped && error.name !== 'AbortError') { setGenerationError(errorMessage(error)); setStatus('Could not check generation status.'); }
       }
     };
     timer = setTimeout(poll, POLL_INTERVAL_MS);
@@ -113,46 +118,36 @@ export default function KaraokeApp() {
   useEffect(() => {
     if (job?.status !== 'completed' || !job.song_id || song?.id === job.song_id) return undefined;
     const controller = new AbortController();
-    getSong(job.song_id, controller.signal)
-      .then((completedSong) => { setSong(completedSong); setActiveTab('player'); })
-      .catch((error) => {
-        if (error.name !== 'AbortError') {
-          setGenerationError(errorMessage(error));
-          setStatus('Could not load the completed song.');
-        }
-      });
+    getSong(job.song_id, controller.signal).then(async (completedSong) => {
+      setSong(completedSong);
+      await refreshLibraries();
+      setActiveTab('player');
+    }).catch((error) => {
+      if (error.name !== 'AbortError') { setGenerationError(errorMessage(error)); setStatus('Could not load the completed song.'); }
+    });
     return () => controller.abort();
-  }, [job?.status, job?.song_id, song?.id]);
+  }, [job?.status, job?.song_id, song?.id, refreshLibraries]);
 
   const seekAll = (time) => {
     const safeTime = Math.max(0, time);
     [instrumentalRef.current, vocalRef.current].forEach((audio) => { if (audio?.src) audio.currentTime = safeTime; });
     setCurrentTime(safeTime);
   };
-
   useEffect(() => {
     if (!song?.id || loadedSongRef.current === song.id) return undefined;
     const controller = new AbortController();
     const loadGeneratedSong = async () => {
       try {
         if (!song.instrumental_file || !song.vocals_file || !song.lyrics_srt_file) throw new Error('The generated song is missing one or more output files.');
-        instrumentalRef.current.src = mediaUrl(song.instrumental_file);
-        vocalRef.current.src = mediaUrl(song.vocals_file);
-        instrumentalRef.current.load();
-        vocalRef.current.load();
+        instrumentalRef.current.src = mediaUrl(song.instrumental_file); vocalRef.current.src = mediaUrl(song.vocals_file);
+        instrumentalRef.current.load(); vocalRef.current.load();
         const response = await fetch(mediaUrl(song.lyrics_srt_file), { signal: controller.signal });
         if (!response.ok) throw new Error('Could not load generated lyrics.');
         const parsed = parseSrt(await response.text());
         if (!parsed.length) throw new Error('Generated SRT has no usable lyric cues.');
-        setLyrics(parsed);
-        seekAll(0);
-        loadedSongRef.current = song.id;
-        setStatus(`${song.artist} — ${song.title} is ready to play.`);
+        setLyrics(parsed); seekAll(0); loadedSongRef.current = song.id; setStatus(`${song.artist} — ${song.title} is ready to play.`);
       } catch (error) {
-        if (error.name !== 'AbortError') {
-          setGenerationError(error.message || 'Could not load generated files.');
-          setStatus('Generated media is unavailable.');
-        }
+        if (error.name !== 'AbortError') { setGenerationError(error.message || 'Could not load generated files.'); setStatus('Generated media is unavailable.'); }
       }
     };
     loadGeneratedSong();
@@ -163,70 +158,48 @@ export default function KaraokeApp() {
     setGenerationError(''); setJob(null); setSong(null); setLyrics([]); loadedSongRef.current = null; setStatus('Uploading full mix…');
     try {
       const created = await createSong({ title: title.trim(), artist: artist.trim(), language: language.trim(), file: sourceFile });
-      setJob(created);
-      setStatus(created.status === 'processing' ? 'Processing song…' : 'Generation queued…');
-    } catch (error) {
-      setGenerationError(errorMessage(error));
-      setStatus('Could not start generation.');
-    }
+      setJob(created); setStatus(created.status === 'processing' ? 'Processing song…' : 'Generation queued…');
+    } catch (error) { setGenerationError(errorMessage(error)); setStatus('Could not start generation.'); }
   };
-
   const syncClock = () => {
     const leader = instrumentalRef.current?.src ? instrumentalRef.current : vocalRef.current;
     if (!leader) return;
-    setCurrentTime(leader.currentTime || 0);
-    setDuration(Number.isFinite(leader.duration) ? leader.duration : 0);
+    setCurrentTime(leader.currentTime || 0); setDuration(Number.isFinite(leader.duration) ? leader.duration : 0);
     if (!leader.paused) rafRef.current = requestAnimationFrame(syncClock);
   };
-
   const togglePlayback = async () => {
     const sources = [instrumentalRef.current, vocalRef.current].filter((audio) => audio?.src);
     if (!sources.length) { setStatus('Choose or generate a song before pressing play.'); return; }
     try {
-      if (isPlaying) {
-        sources.forEach((audio) => audio.pause()); cancelAnimationFrame(rafRef.current); setIsPlaying(false);
-      } else {
-        const leaderTime = sources[0].currentTime;
-        sources.slice(1).forEach((audio) => { audio.currentTime = leaderTime; });
-        await Promise.all(sources.map((audio) => audio.play()));
-        setIsPlaying(true); rafRef.current = requestAnimationFrame(syncClock);
-      }
-    } catch {
-      setStatus('The browser could not start playback. Reload the generated audio.'); setIsPlaying(false);
-    }
+      if (isPlaying) { sources.forEach((audio) => audio.pause()); cancelAnimationFrame(rafRef.current); setIsPlaying(false); }
+      else { const leaderTime = sources[0].currentTime; sources.slice(1).forEach((audio) => { audio.currentTime = leaderTime; }); await Promise.all(sources.map((audio) => audio.play())); setIsPlaying(true); rafRef.current = requestAnimationFrame(syncClock); }
+    } catch { setStatus('The browser could not start playback. Reload the generated audio.'); setIsPlaying(false); }
   };
-
   const jumpToCue = (direction) => {
     if (!lyrics.length) return;
     const fallbackIndex = lyrics.findIndex((cue) => cue.start > currentTime);
     const base = currentCueIndex >= 0 ? currentCueIndex : Math.max(0, fallbackIndex);
     seekAll(lyrics[clamp(base + direction, 0, lyrics.length - 1)].start);
   };
-
   const onLoadedMetadata = () => {
     const tracks = [instrumentalRef.current, vocalRef.current].filter((audio) => audio?.src && Number.isFinite(audio.duration));
     setDuration(tracks.length ? Math.max(...tracks.map((audio) => audio.duration)) : 0);
   };
-
+  const previewLibrarySong = (selectedSong) => {
+    if (selectedSong.processing_status !== 'ready') { setLibraryError('This song is not ready to play.'); return; }
+    setLibraryError('Song actions are being prepared.');
+  };
   const generationReady = title.trim() && artist.trim() && language.trim() && sourceFile;
   const generating = ACTIVE_JOB_STATES.includes(job?.status);
   useEffect(() => () => cancelAnimationFrame(rafRef.current), []);
 
   return (
     <main className="karaoke-app">
-      <audio ref={instrumentalRef} onLoadedMetadata={onLoadedMetadata} onEnded={() => setIsPlaying(false)} />
-      <audio ref={vocalRef} onLoadedMetadata={onLoadedMetadata} />
+      <audio ref={instrumentalRef} onLoadedMetadata={onLoadedMetadata} onEnded={() => setIsPlaying(false)} /><audio ref={vocalRef} onLoadedMetadata={onLoadedMetadata} />
       <header className="topbar"><div className="brand"><span className="brand-mark">♫</span><span>Karaoke<span className="accent">Gen</span></span></div><p>One song in. Your karaoke mix out.</p></header>
       <KaraokeTabs activeTab={activeTab} onSelect={setActiveTab} />
-      <section id="player-panel" className="tab-panel player-panel" role="tabpanel" aria-labelledby="player-tab" hidden={activeTab !== 'player'}>
-        <PlayerView master={master} instrumentalVolume={instrumentalVolume} vocalVolume={vocalVolume} onMasterChange={setMaster} onInstrumentalChange={setInstrumentalVolume} onVocalChange={setVocalVolume} onReset={() => { setMaster(80); setInstrumentalVolume(100); setVocalVolume(65); }} previousCue={previousCue} currentCue={currentCue} nextCue={nextCue} currentCueIndex={currentCueIndex} lyrics={lyrics} onSeek={seekAll} status={status} isPlaying={isPlaying} onTogglePlayback={togglePlayback} onJumpToCue={jumpToCue} currentTime={currentTime} duration={duration} formatTime={formatTime} />
-      </section>
-      <section id="library-panel" className="tab-panel library-panel" role="tabpanel" aria-labelledby="library-tab" hidden={activeTab !== 'library'}>
-        <div className="library-grid">
-          <GenerationForm title={title} artist={artist} language={language} sourceFile={sourceFile} job={job} error={generationError} generating={generating} generationReady={generationReady} onTitleChange={setTitle} onArtistChange={setArtist} onLanguageChange={setLanguage} onFileChange={setSourceFile} onSubmit={submitGeneration} />
-          <section className="library-placeholder"><span className="eyebrow">Library</span><h1>Your karaoke songs</h1><p>Generated songs will appear here.</p></section>
-        </div>
-      </section>
+      <section id="player-panel" className="tab-panel player-panel" role="tabpanel" aria-labelledby="player-tab" hidden={activeTab !== 'player'}><PlayerView master={master} instrumentalVolume={instrumentalVolume} vocalVolume={vocalVolume} onMasterChange={setMaster} onInstrumentalChange={setInstrumentalVolume} onVocalChange={setVocalVolume} onReset={() => { setMaster(80); setInstrumentalVolume(100); setVocalVolume(65); }} previousCue={previousCue} currentCue={currentCue} nextCue={nextCue} currentCueIndex={currentCueIndex} lyrics={lyrics} onSeek={seekAll} status={status} isPlaying={isPlaying} onTogglePlayback={togglePlayback} onJumpToCue={jumpToCue} currentTime={currentTime} duration={duration} formatTime={formatTime} /></section>
+      <section id="library-panel" className="tab-panel library-panel" role="tabpanel" aria-labelledby="library-tab" hidden={activeTab !== 'library'}><div className="library-grid"><GenerationForm title={title} artist={artist} language={language} sourceFile={sourceFile} job={job} error={generationError} generating={generating} generationReady={generationReady} onTitleChange={setTitle} onArtistChange={setArtist} onLanguageChange={setLanguage} onFileChange={setSourceFile} onSubmit={submitGeneration} /><LibraryView libraries={libraries} loading={libraryLoading} error={libraryError} onRetry={() => refreshLibraries()} onLoad={previewLibrarySong} /></div></section>
     </main>
   );
 }
