@@ -3,6 +3,7 @@ import { createSong, getProcessingJob, getSong, mediaUrl } from './api';
 import './KaraokeApp.css';
 
 const ACTIVE_JOB_STATES = ['queued', 'processing'];
+const POLL_INTERVAL_MS = 2000;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const formatTime = (seconds = 0) => {
   if (!Number.isFinite(seconds)) return '0:00';
@@ -81,11 +82,18 @@ export default function KaraokeApp() {
   }, [master, instrumentalVolume, vocalVolume]);
 
   useEffect(() => {
-    if (!job?.job_id || !ACTIVE_JOB_STATES.includes(job.status)) return undefined;
+    const jobId = job?.job_id;
+    if (!jobId || !ACTIVE_JOB_STATES.includes(job.status)) return undefined;
+
     const controller = new AbortController();
-    const timer = setTimeout(async () => {
+    let timer;
+    let stopped = false;
+
+    const poll = async () => {
       try {
-        const next = await getProcessingJob(job.job_id, controller.signal);
+        const next = await getProcessingJob(jobId, controller.signal);
+        if (stopped) return;
+
         setJob(next);
         if (next.status === 'failed') {
           setGenerationError(next.error || 'Song processing failed.');
@@ -94,16 +102,23 @@ export default function KaraokeApp() {
           setStatus('Processing complete. Loading generated song…');
         } else {
           setStatus(next.status === 'queued' ? 'Generation queued…' : 'Separating stems and aligning lyrics…');
+          timer = setTimeout(poll, POLL_INTERVAL_MS);
         }
       } catch (error) {
-        if (error.name !== 'AbortError') {
+        if (!stopped && error.name !== 'AbortError') {
           setGenerationError(errorMessage(error));
           setStatus('Could not check generation status.');
         }
       }
-    }, 2000);
-    return () => { clearTimeout(timer); controller.abort(); };
-  }, [job?.job_id, job?.status, job?.updated_at]);
+    };
+
+    timer = setTimeout(poll, POLL_INTERVAL_MS);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [job?.job_id]);
 
   useEffect(() => {
     if (job?.status !== 'completed' || !job.song_id || song?.id === job.song_id) return undefined;
@@ -159,10 +174,16 @@ export default function KaraokeApp() {
   }, [song]);
 
   const submitGeneration = async () => {
-    setGenerationError(''); setJob(null); setSong(null); setLyrics([]); loadedSongRef.current = null;
+    setGenerationError('');
+    setJob(null);
+    setSong(null);
+    setLyrics([]);
+    loadedSongRef.current = null;
     setStatus('Uploading full mix…');
     try {
-      const created = await createSong({ title: title.trim(), artist: artist.trim(), language: language.trim(), file: sourceFile });
+      const created = await createSong({
+        title: title.trim(), artist: artist.trim(), language: language.trim(), file: sourceFile,
+      });
       setJob(created);
       setStatus(created.status === 'processing' ? 'Processing song…' : 'Generation queued…');
     } catch (error) {
@@ -181,18 +202,25 @@ export default function KaraokeApp() {
 
   const togglePlayback = async () => {
     const sources = [instrumentalRef.current, vocalRef.current].filter((audio) => audio?.src);
-    if (!sources.length) { setStatus('Generate a song before pressing play.'); return; }
+    if (!sources.length) {
+      setStatus('Generate a song before pressing play.');
+      return;
+    }
     try {
       if (isPlaying) {
-        sources.forEach((audio) => audio.pause()); cancelAnimationFrame(rafRef.current); setIsPlaying(false);
+        sources.forEach((audio) => audio.pause());
+        cancelAnimationFrame(rafRef.current);
+        setIsPlaying(false);
       } else {
         const leaderTime = sources[0].currentTime;
         sources.slice(1).forEach((audio) => { audio.currentTime = leaderTime; });
         await Promise.all(sources.map((audio) => audio.play()));
-        setIsPlaying(true); rafRef.current = requestAnimationFrame(syncClock);
+        setIsPlaying(true);
+        rafRef.current = requestAnimationFrame(syncClock);
       }
     } catch {
-      setStatus('The browser could not start playback. Reload the generated audio.'); setIsPlaying(false);
+      setStatus('The browser could not start playback. Reload the generated audio.');
+      setIsPlaying(false);
     }
   };
 
