@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createSong, getProcessingJob, getSong, mediaUrl } from './api';
+import KaraokeTabs from './KaraokeTabs';
+import { GenerationForm, PlayerView } from './KaraokeViews';
 import './KaraokeApp.css';
 
 const ACTIVE_JOB_STATES = ['queued', 'processing'];
@@ -27,17 +29,13 @@ export function parseSrt(source) {
     if (timingIndex < 0) return null;
     const [start, end] = lines[timingIndex].split('-->').map(parseTimestamp);
     const text = lines.slice(timingIndex + 1).join(' ').trim();
-    return text && Number.isFinite(start) && Number.isFinite(end)
-      ? { id: index + 1, start, end, text }
-      : null;
+    return text && Number.isFinite(start) && Number.isFinite(end) ? { id: index + 1, start, end, text } : null;
   }).filter(Boolean);
 }
 
-function errorMessage(error) {
+export function errorMessage(error) {
   if (error.status === 400 && error.body) {
-    return Object.entries(error.body)
-      .map(([field, messages]) => `${field.replaceAll('_', ' ')}: ${[].concat(messages).join(' ')}`)
-      .join(' ');
+    return Object.entries(error.body).map(([field, messages]) => `${field.replaceAll('_', ' ')}: ${[].concat(messages).join(' ')}`).join(' ');
   }
   if (error.status === 404) return 'This processing job is no longer available.';
   if (error.status === 502) return 'The audio processing service is unavailable. Please retry.';
@@ -49,7 +47,7 @@ export default function KaraokeApp() {
   const vocalRef = useRef(null);
   const rafRef = useRef(null);
   const loadedSongRef = useRef(null);
-
+  const [activeTab, setActiveTab] = useState('player');
   const [title, setTitle] = useState('');
   const [artist, setArtist] = useState('');
   const [language, setLanguage] = useState('en');
@@ -64,7 +62,7 @@ export default function KaraokeApp() {
   const [master, setMaster] = useState(80);
   const [instrumentalVolume, setInstrumentalVolume] = useState(100);
   const [vocalVolume, setVocalVolume] = useState(65);
-  const [status, setStatus] = useState('Enter song details and choose a full mix.');
+  const [status, setStatus] = useState('Choose a song from your library.');
 
   const currentCueIndex = useMemo(() => {
     const active = lyrics.findIndex((cue) => currentTime >= cue.start && currentTime < cue.end);
@@ -84,16 +82,13 @@ export default function KaraokeApp() {
   useEffect(() => {
     const jobId = job?.job_id;
     if (!jobId) return undefined;
-
     const controller = new AbortController();
     let timer;
     let stopped = false;
-
     const poll = async () => {
       try {
         const next = await getProcessingJob(jobId, controller.signal);
         if (stopped) return;
-
         setJob(next);
         if (next.status === 'failed') {
           setGenerationError(next.error || 'Song processing failed.');
@@ -111,20 +106,15 @@ export default function KaraokeApp() {
         }
       }
     };
-
     timer = setTimeout(poll, POLL_INTERVAL_MS);
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-      controller.abort();
-    };
+    return () => { stopped = true; clearTimeout(timer); controller.abort(); };
   }, [job?.job_id]);
 
   useEffect(() => {
     if (job?.status !== 'completed' || !job.song_id || song?.id === job.song_id) return undefined;
     const controller = new AbortController();
     getSong(job.song_id, controller.signal)
-      .then(setSong)
+      .then((completedSong) => { setSong(completedSong); setActiveTab('player'); })
       .catch((error) => {
         if (error.name !== 'AbortError') {
           setGenerationError(errorMessage(error));
@@ -136,9 +126,7 @@ export default function KaraokeApp() {
 
   const seekAll = (time) => {
     const safeTime = Math.max(0, time);
-    [instrumentalRef.current, vocalRef.current].forEach((audio) => {
-      if (audio?.src) audio.currentTime = safeTime;
-    });
+    [instrumentalRef.current, vocalRef.current].forEach((audio) => { if (audio?.src) audio.currentTime = safeTime; });
     setCurrentTime(safeTime);
   };
 
@@ -147,9 +135,7 @@ export default function KaraokeApp() {
     const controller = new AbortController();
     const loadGeneratedSong = async () => {
       try {
-        if (!song.instrumental_file || !song.vocals_file || !song.lyrics_srt_file) {
-          throw new Error('The generated song is missing one or more output files.');
-        }
+        if (!song.instrumental_file || !song.vocals_file || !song.lyrics_srt_file) throw new Error('The generated song is missing one or more output files.');
         instrumentalRef.current.src = mediaUrl(song.instrumental_file);
         vocalRef.current.src = mediaUrl(song.vocals_file);
         instrumentalRef.current.load();
@@ -174,16 +160,9 @@ export default function KaraokeApp() {
   }, [song]);
 
   const submitGeneration = async () => {
-    setGenerationError('');
-    setJob(null);
-    setSong(null);
-    setLyrics([]);
-    loadedSongRef.current = null;
-    setStatus('Uploading full mix…');
+    setGenerationError(''); setJob(null); setSong(null); setLyrics([]); loadedSongRef.current = null; setStatus('Uploading full mix…');
     try {
-      const created = await createSong({
-        title: title.trim(), artist: artist.trim(), language: language.trim(), file: sourceFile,
-      });
+      const created = await createSong({ title: title.trim(), artist: artist.trim(), language: language.trim(), file: sourceFile });
       setJob(created);
       setStatus(created.status === 'processing' ? 'Processing song…' : 'Generation queued…');
     } catch (error) {
@@ -202,25 +181,18 @@ export default function KaraokeApp() {
 
   const togglePlayback = async () => {
     const sources = [instrumentalRef.current, vocalRef.current].filter((audio) => audio?.src);
-    if (!sources.length) {
-      setStatus('Generate a song before pressing play.');
-      return;
-    }
+    if (!sources.length) { setStatus('Choose or generate a song before pressing play.'); return; }
     try {
       if (isPlaying) {
-        sources.forEach((audio) => audio.pause());
-        cancelAnimationFrame(rafRef.current);
-        setIsPlaying(false);
+        sources.forEach((audio) => audio.pause()); cancelAnimationFrame(rafRef.current); setIsPlaying(false);
       } else {
         const leaderTime = sources[0].currentTime;
         sources.slice(1).forEach((audio) => { audio.currentTime = leaderTime; });
         await Promise.all(sources.map((audio) => audio.play()));
-        setIsPlaying(true);
-        rafRef.current = requestAnimationFrame(syncClock);
+        setIsPlaying(true); rafRef.current = requestAnimationFrame(syncClock);
       }
     } catch {
-      setStatus('The browser could not start playback. Reload the generated audio.');
-      setIsPlaying(false);
+      setStatus('The browser could not start playback. Reload the generated audio.'); setIsPlaying(false);
     }
   };
 
@@ -245,27 +217,16 @@ export default function KaraokeApp() {
       <audio ref={instrumentalRef} onLoadedMetadata={onLoadedMetadata} onEnded={() => setIsPlaying(false)} />
       <audio ref={vocalRef} onLoadedMetadata={onLoadedMetadata} />
       <header className="topbar"><div className="brand"><span className="brand-mark">♫</span><span>Karaoke<span className="accent">Gen</span></span></div><p>One song in. Your karaoke mix out.</p></header>
-      <section className="workspace">
-        <aside className="panel setup-panel">
-          <div className="panel-heading"><div><span className="eyebrow">Generator</span><h2>Source song</h2></div><span className="ready-dot" title={generationReady ? 'Ready' : 'Details required'} /></div>
-          <label className="field-label">Title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Song title" disabled={generating} /></label>
-          <label className="field-label">Artist<input value={artist} onChange={(event) => setArtist(event.target.value)} placeholder="Artist name" disabled={generating} /></label>
-          <label className="field-label">Language<input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="en" pattern="[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?" disabled={generating} /></label>
-          <label className="upload-card source-upload"><span className="upload-icon">♪</span><span><strong>Full mix</strong><small>{sourceFile?.name || 'Choose an MP3 or WAV file'}</small></span><input type="file" accept=".mp3,.wav,audio/mpeg,audio/wav" disabled={generating} onChange={(event) => setSourceFile(event.target.files?.[0] || null)} /></label>
-          <button className="generate-button" disabled={!generationReady || generating} onClick={submitGeneration}>{generating ? `${job.status === 'queued' ? 'Queued' : 'Processing'}…` : 'Generate karaoke track'}</button>
-          {job && <div className={`job-status ${job.status}`}><strong>{job.status}</strong><span>Job {job.job_id}</span></div>}
-          {generationError && <div className="generation-error" role="alert">{generationError}</div>}
-          <div className="format-note">MP3 or WAV · language uses a code such as en, hr, or en-US</div>
-          <div className="mixer"><div className="panel-heading compact"><div><span className="eyebrow">Mix</span><h2>Levels</h2></div><button className="text-button" onClick={() => { setMaster(80); setInstrumentalVolume(100); setVocalVolume(65); }}>Reset</button></div><Slider label="Master" icon="◉" value={master} setValue={setMaster} /><Slider label="Instrumental" icon="◌" value={instrumentalVolume} setValue={setInstrumentalVolume} /><Slider label="Guide vocals" icon="◍" value={vocalVolume} setValue={setVocalVolume} /></div>
-        </aside>
-        <section className="stage"><div className="stage-glow glow-one" /><div className="stage-glow glow-two" /><span className="stage-label">Live lyric view</span><div className="lyrics-display" aria-live="polite"><p className="nearby previous">{previousCue?.text || ' '}</p><p className="active-lyric">{currentCue?.text || (generating ? 'Creating your karaoke track…' : 'Generate a song to begin')}</p><p className="nearby next">{nextCue?.text || 'Synchronized lyrics will appear here'}</p></div><div className="cue-pill"><span className="pulse" /> Cue {currentCueIndex >= 0 ? currentCueIndex + 1 : 0} of {lyrics.length}</div></section>
-        <aside className="panel cue-panel"><div className="panel-heading"><div><span className="eyebrow">Navigator</span><h2>Lyric cues</h2></div><span className="cue-count">{lyrics.length}</span></div><div className="cue-list">{lyrics.map((cue, index) => <button key={`${cue.id}-${index}`} onClick={() => seekAll(cue.start)} className={`cue-row ${index === currentCueIndex ? 'current' : ''} ${index < currentCueIndex ? 'past' : ''}`}><span>{formatTime(cue.start)}</span><strong>{cue.text}</strong></button>)}</div></aside>
+      <KaraokeTabs activeTab={activeTab} onSelect={setActiveTab} />
+      <section id="player-panel" className="tab-panel player-panel" role="tabpanel" aria-labelledby="player-tab" hidden={activeTab !== 'player'}>
+        <PlayerView master={master} instrumentalVolume={instrumentalVolume} vocalVolume={vocalVolume} onMasterChange={setMaster} onInstrumentalChange={setInstrumentalVolume} onVocalChange={setVocalVolume} onReset={() => { setMaster(80); setInstrumentalVolume(100); setVocalVolume(65); }} previousCue={previousCue} currentCue={currentCue} nextCue={nextCue} currentCueIndex={currentCueIndex} lyrics={lyrics} onSeek={seekAll} status={status} isPlaying={isPlaying} onTogglePlayback={togglePlayback} onJumpToCue={jumpToCue} currentTime={currentTime} duration={duration} formatTime={formatTime} />
       </section>
-      <footer className="transport"><div className="transport-info"><span className="status-light" /><span>{status}</span></div><div className="transport-controls"><button className="transport-button" onClick={() => jumpToCue(-1)} aria-label="Previous lyric cue">|◀</button><button className="play-button" onClick={togglePlayback} aria-label={isPlaying ? 'Pause' : 'Play'}>{isPlaying ? 'Ⅱ' : '▶'}</button><button className="transport-button" onClick={() => jumpToCue(1)} aria-label="Next lyric cue">▶|</button></div><div className="progress-wrap"><span>{formatTime(currentTime)}</span><input aria-label="Track progress" type="range" min="0" max={duration || 1} step="0.01" value={Math.min(currentTime, duration || 0)} onChange={(event) => seekAll(Number(event.target.value))} /><span>{formatTime(duration)}</span></div></footer>
+      <section id="library-panel" className="tab-panel library-panel" role="tabpanel" aria-labelledby="library-tab" hidden={activeTab !== 'library'}>
+        <div className="library-grid">
+          <GenerationForm title={title} artist={artist} language={language} sourceFile={sourceFile} job={job} error={generationError} generating={generating} generationReady={generationReady} onTitleChange={setTitle} onArtistChange={setArtist} onLanguageChange={setLanguage} onFileChange={setSourceFile} onSubmit={submitGeneration} />
+          <section className="library-placeholder"><span className="eyebrow">Library</span><h1>Your karaoke songs</h1><p>Generated songs will appear here.</p></section>
+        </div>
+      </section>
     </main>
   );
-}
-
-function Slider({ label, icon, value, setValue }) {
-  return <label className="level-row"><span className="level-label"><i>{icon}</i>{label}</span><input type="range" min="0" max="100" value={value} onChange={(event) => setValue(Number(event.target.value))} /><output>{value}%</output></label>;
 }
