@@ -1,27 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createSong, getProcessingJob, getSong, mediaUrl } from './api';
 import './KaraokeApp.css';
 
-const INITIAL_LYRICS = [
-  { id: 1, start: 3.142, end: 3.462, text: 'Your' },
-  { id: 2, start: 3.762, end: 4.243, text: 'eyes' },
-  { id: 3, start: 4.363, end: 5.183, text: 'blue' },
-  { id: 4, start: 5.223, end: 5.323, text: 'look' },
-  { id: 5, start: 5.523, end: 6.344, text: 'away' },
-  { id: 6, start: 6.444, end: 6.644, text: 'But' },
-  { id: 7, start: 6.764, end: 8.085, text: 'I knew' },
-  { id: 8, start: 8.165, end: 8.485, text: 'if I stared' },
-  { id: 9, start: 8.505, end: 9.126, text: 'for too long' },
-  { id: 10, start: 9.206, end: 10.647, text: 'I could get lost' },
-  { id: 11, start: 10.767, end: 12.928, text: 'I got to have you' },
-  { id: 12, start: 13.628, end: 15.47, text: 'At all costs' },
-  { id: 13, start: 15.57, end: 17.931, text: 'I miss your hand holding mine' },
-  { id: 14, start: 18.752, end: 22.294, text: "I feel like I'm standing in a line" },
-  { id: 15, start: 28.075, end: 30.757, text: 'I miss your writing on my spine' },
-  { id: 16, start: 31.138, end: 35.461, text: "I feel like I'm the oenophile and you're my favourite wine" },
-  { id: 17, start: 35.541, end: 41.006, text: "High on the smoke nine, this is for what I'm designed" },
-  { id: 18, start: 41.126, end: 49.833, text: 'To be on the skyline' },
-];
-
+const ACTIVE_JOB_STATES = ['queued', 'processing'];
+const POLL_INTERVAL_MS = 2000;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const formatTime = (seconds = 0) => {
   if (!Number.isFinite(seconds)) return '0:00';
@@ -36,7 +18,7 @@ function parseTimestamp(timestamp) {
   return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds) + Number(milliseconds.padEnd(3, '0').slice(0, 3)) / 1000;
 }
 
-function parseSrt(source) {
+export function parseSrt(source) {
   const normalized = source.replace(/^\uFEFF/, '').replace(/\r/g, '').trim();
   if (!normalized) return [];
   return normalized.split(/\n{2,}/).map((block, index) => {
@@ -51,23 +33,38 @@ function parseSrt(source) {
   }).filter(Boolean);
 }
 
+function errorMessage(error) {
+  if (error.status === 400 && error.body) {
+    return Object.entries(error.body)
+      .map(([field, messages]) => `${field.replaceAll('_', ' ')}: ${[].concat(messages).join(' ')}`)
+      .join(' ');
+  }
+  if (error.status === 404) return 'This processing job is no longer available.';
+  if (error.status === 502) return 'The audio processing service is unavailable. Please retry.';
+  return error.message || 'Generation failed. Please retry.';
+}
+
 export default function KaraokeApp() {
   const instrumentalRef = useRef(null);
   const vocalRef = useRef(null);
   const rafRef = useRef(null);
-  const objectUrls = useRef([]);
+  const loadedSongRef = useRef(null);
 
-  const [lyrics, setLyrics] = useState(INITIAL_LYRICS);
-  const [instrumentalName, setInstrumentalName] = useState('No instrumental selected');
-  const [vocalName, setVocalName] = useState('No vocal stem selected');
-  const [srtName, setSrtName] = useState('lyrics_aligned.srt');
+  const [title, setTitle] = useState('');
+  const [artist, setArtist] = useState('');
+  const [language, setLanguage] = useState('en');
+  const [sourceFile, setSourceFile] = useState(null);
+  const [job, setJob] = useState(null);
+  const [song, setSong] = useState(null);
+  const [generationError, setGenerationError] = useState('');
+  const [lyrics, setLyrics] = useState([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [master, setMaster] = useState(80);
   const [instrumentalVolume, setInstrumentalVolume] = useState(100);
   const [vocalVolume, setVocalVolume] = useState(65);
-  const [status, setStatus] = useState('Load your separated stems to start singing.');
+  const [status, setStatus] = useState('Enter song details and choose a full mix.');
 
   const currentCueIndex = useMemo(() => {
     const active = lyrics.findIndex((cue) => currentTime >= cue.start && currentTime < cue.end);
@@ -75,27 +72,67 @@ export default function KaraokeApp() {
     const next = lyrics.findIndex((cue) => cue.start > currentTime);
     return next > 0 ? next - 1 : next;
   }, [lyrics, currentTime]);
-
   const currentCue = currentCueIndex >= 0 ? lyrics[currentCueIndex] : null;
   const previousCue = currentCueIndex > 0 ? lyrics[currentCueIndex - 1] : null;
   const nextCue = currentCueIndex >= 0 && currentCueIndex < lyrics.length - 1 ? lyrics[currentCueIndex + 1] : null;
 
-  const applyVolumes = () => {
+  useEffect(() => {
     if (instrumentalRef.current) instrumentalRef.current.volume = (master / 100) * (instrumentalVolume / 100);
     if (vocalRef.current) vocalRef.current.volume = (master / 100) * (vocalVolume / 100);
-  };
-
-  useEffect(() => {
-    applyVolumes();
   }, [master, instrumentalVolume, vocalVolume]);
 
-  const syncClock = () => {
-    const leader = instrumentalRef.current?.src ? instrumentalRef.current : vocalRef.current;
-    if (!leader) return;
-    setCurrentTime(leader.currentTime || 0);
-    setDuration(Number.isFinite(leader.duration) ? leader.duration : 0);
-    if (!leader.paused) rafRef.current = requestAnimationFrame(syncClock);
-  };
+  useEffect(() => {
+    const jobId = job?.job_id;
+    if (!jobId) return undefined;
+
+    const controller = new AbortController();
+    let timer;
+    let stopped = false;
+
+    const poll = async () => {
+      try {
+        const next = await getProcessingJob(jobId, controller.signal);
+        if (stopped) return;
+
+        setJob(next);
+        if (next.status === 'failed') {
+          setGenerationError(next.error || 'Song processing failed.');
+          setStatus('Generation failed.');
+        } else if (next.status === 'completed') {
+          setStatus('Processing complete. Loading generated song…');
+        } else {
+          setStatus(next.status === 'queued' ? 'Generation queued…' : 'Separating stems and aligning lyrics…');
+          timer = setTimeout(poll, POLL_INTERVAL_MS);
+        }
+      } catch (error) {
+        if (!stopped && error.name !== 'AbortError') {
+          setGenerationError(errorMessage(error));
+          setStatus('Could not check generation status.');
+        }
+      }
+    };
+
+    timer = setTimeout(poll, POLL_INTERVAL_MS);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [job?.job_id]);
+
+  useEffect(() => {
+    if (job?.status !== 'completed' || !job.song_id || song?.id === job.song_id) return undefined;
+    const controller = new AbortController();
+    getSong(job.song_id, controller.signal)
+      .then(setSong)
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          setGenerationError(errorMessage(error));
+          setStatus('Could not load the completed song.');
+        }
+      });
+    return () => controller.abort();
+  }, [job?.status, job?.song_id, song?.id]);
 
   const seekAll = (time) => {
     const safeTime = Math.max(0, time);
@@ -105,40 +142,68 @@ export default function KaraokeApp() {
     setCurrentTime(safeTime);
   };
 
-  const handleAudioFile = (event, type) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    objectUrls.current.push(url);
-    const audio = type === 'instrumental' ? instrumentalRef.current : vocalRef.current;
-    if (audio) {
-      audio.src = url;
-      audio.load();
+  useEffect(() => {
+    if (!song?.id || loadedSongRef.current === song.id) return undefined;
+    const controller = new AbortController();
+    const loadGeneratedSong = async () => {
+      try {
+        if (!song.instrumental_file || !song.vocals_file || !song.lyrics_srt_file) {
+          throw new Error('The generated song is missing one or more output files.');
+        }
+        instrumentalRef.current.src = mediaUrl(song.instrumental_file);
+        vocalRef.current.src = mediaUrl(song.vocals_file);
+        instrumentalRef.current.load();
+        vocalRef.current.load();
+        const response = await fetch(mediaUrl(song.lyrics_srt_file), { signal: controller.signal });
+        if (!response.ok) throw new Error('Could not load generated lyrics.');
+        const parsed = parseSrt(await response.text());
+        if (!parsed.length) throw new Error('Generated SRT has no usable lyric cues.');
+        setLyrics(parsed);
+        seekAll(0);
+        loadedSongRef.current = song.id;
+        setStatus(`${song.artist} — ${song.title} is ready to play.`);
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          setGenerationError(error.message || 'Could not load generated files.');
+          setStatus('Generated media is unavailable.');
+        }
+      }
+    };
+    loadGeneratedSong();
+    return () => controller.abort();
+  }, [song]);
+
+  const submitGeneration = async () => {
+    setGenerationError('');
+    setJob(null);
+    setSong(null);
+    setLyrics([]);
+    loadedSongRef.current = null;
+    setStatus('Uploading full mix…');
+    try {
+      const created = await createSong({
+        title: title.trim(), artist: artist.trim(), language: language.trim(), file: sourceFile,
+      });
+      setJob(created);
+      setStatus(created.status === 'processing' ? 'Processing song…' : 'Generation queued…');
+    } catch (error) {
+      setGenerationError(errorMessage(error));
+      setStatus('Could not start generation.');
     }
-    if (type === 'instrumental') setInstrumentalName(file.name);
-    else setVocalName(file.name);
-    setStatus(`${type === 'instrumental' ? 'Instrumental' : 'Vocal stem'} loaded: ${file.name}`);
   };
 
-  const handleSrtFile = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    try {
-      const parsed = parseSrt(await file.text());
-      if (!parsed.length) throw new Error('No usable SRT cues were found.');
-      setLyrics(parsed);
-      setSrtName(file.name);
-      setStatus(`Imported ${parsed.length} lyric cues from ${file.name}.`);
-      seekAll(0);
-    } catch (error) {
-      setStatus(error.message || 'Unable to parse this subtitle file.');
-    }
+  const syncClock = () => {
+    const leader = instrumentalRef.current?.src ? instrumentalRef.current : vocalRef.current;
+    if (!leader) return;
+    setCurrentTime(leader.currentTime || 0);
+    setDuration(Number.isFinite(leader.duration) ? leader.duration : 0);
+    if (!leader.paused) rafRef.current = requestAnimationFrame(syncClock);
   };
 
   const togglePlayback = async () => {
     const sources = [instrumentalRef.current, vocalRef.current].filter((audio) => audio?.src);
     if (!sources.length) {
-      setStatus('Choose at least one audio stem before pressing play.');
+      setStatus('Generate a song before pressing play.');
       return;
     }
     try {
@@ -154,7 +219,7 @@ export default function KaraokeApp() {
         rafRef.current = requestAnimationFrame(syncClock);
       }
     } catch {
-      setStatus('The browser could not start playback. Try loading audio again.');
+      setStatus('The browser could not start playback. Reload the generated audio.');
       setIsPlaying(false);
     }
   };
@@ -163,8 +228,7 @@ export default function KaraokeApp() {
     if (!lyrics.length) return;
     const fallbackIndex = lyrics.findIndex((cue) => cue.start > currentTime);
     const base = currentCueIndex >= 0 ? currentCueIndex : Math.max(0, fallbackIndex);
-    const target = lyrics[clamp(base + direction, 0, lyrics.length - 1)];
-    seekAll(target.start);
+    seekAll(lyrics[clamp(base + direction, 0, lyrics.length - 1)].start);
   };
 
   const onLoadedMetadata = () => {
@@ -172,90 +236,32 @@ export default function KaraokeApp() {
     setDuration(tracks.length ? Math.max(...tracks.map((audio) => audio.duration)) : 0);
   };
 
-  useEffect(() => () => {
-    cancelAnimationFrame(rafRef.current);
-    objectUrls.current.forEach(URL.revokeObjectURL);
-  }, []);
+  const generationReady = title.trim() && artist.trim() && language.trim() && sourceFile;
+  const generating = ACTIVE_JOB_STATES.includes(job?.status);
+  useEffect(() => () => cancelAnimationFrame(rafRef.current), []);
 
   return (
     <main className="karaoke-app">
       <audio ref={instrumentalRef} onLoadedMetadata={onLoadedMetadata} onEnded={() => setIsPlaying(false)} />
       <audio ref={vocalRef} onLoadedMetadata={onLoadedMetadata} />
-
-      <header className="topbar">
-        <div className="brand"><span className="brand-mark">♫</span><span>Karaoke<span className="accent">Gen</span></span></div>
-        <p>Two stems. One performance.</p>
-      </header>
-
+      <header className="topbar"><div className="brand"><span className="brand-mark">♫</span><span>Karaoke<span className="accent">Gen</span></span></div><p>One song in. Your karaoke mix out.</p></header>
       <section className="workspace">
         <aside className="panel setup-panel">
-          <div className="panel-heading">
-            <div><span className="eyebrow">Session</span><h2>Source files</h2></div>
-            <span className="ready-dot" title="Ready" />
-          </div>
-
-          <label className="upload-card">
-            <span className="upload-icon">◫</span>
-            <span><strong>Instrumental</strong><small>{instrumentalName}</small></span>
-            <input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.aac,.flac" onChange={(event) => handleAudioFile(event, 'instrumental')} />
-          </label>
-          <label className="upload-card">
-            <span className="upload-icon">♬</span>
-            <span><strong>Guide vocals</strong><small>{vocalName}</small></span>
-            <input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.aac,.flac" onChange={(event) => handleAudioFile(event, 'vocal')} />
-          </label>
-          <label className="upload-card lyric-upload">
-            <span className="upload-icon">≡</span>
-            <span><strong>Timed lyrics</strong><small>{srtName}</small></span>
-            <input type="file" accept=".srt,text/srt,application/x-subrip" onChange={handleSrtFile} />
-          </label>
-
-          <div className="format-note">Browser-supported audio only · SRT timestamps drive the lyric display</div>
-
-          <div className="mixer">
-            <div className="panel-heading compact"><div><span className="eyebrow">Mix</span><h2>Levels</h2></div><button className="text-button" onClick={() => { setMaster(80); setInstrumentalVolume(100); setVocalVolume(65); }}>Reset</button></div>
-            <Slider label="Master" icon="◉" value={master} setValue={setMaster} />
-            <Slider label="Instrumental" icon="◌" value={instrumentalVolume} setValue={setInstrumentalVolume} />
-            <Slider label="Guide vocals" icon="◍" value={vocalVolume} setValue={setVocalVolume} />
-          </div>
+          <div className="panel-heading"><div><span className="eyebrow">Generator</span><h2>Source song</h2></div><span className="ready-dot" title={generationReady ? 'Ready' : 'Details required'} /></div>
+          <label className="field-label">Title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Song title" disabled={generating} /></label>
+          <label className="field-label">Artist<input value={artist} onChange={(event) => setArtist(event.target.value)} placeholder="Artist name" disabled={generating} /></label>
+          <label className="field-label">Language<input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="en" pattern="[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?" disabled={generating} /></label>
+          <label className="upload-card source-upload"><span className="upload-icon">♪</span><span><strong>Full mix</strong><small>{sourceFile?.name || 'Choose an MP3 or WAV file'}</small></span><input type="file" accept=".mp3,.wav,audio/mpeg,audio/wav" disabled={generating} onChange={(event) => setSourceFile(event.target.files?.[0] || null)} /></label>
+          <button className="generate-button" disabled={!generationReady || generating} onClick={submitGeneration}>{generating ? `${job.status === 'queued' ? 'Queued' : 'Processing'}…` : 'Generate karaoke track'}</button>
+          {job && <div className={`job-status ${job.status}`}><strong>{job.status}</strong><span>Job {job.job_id}</span></div>}
+          {generationError && <div className="generation-error" role="alert">{generationError}</div>}
+          <div className="format-note">MP3 or WAV · language uses a code such as en, hr, or en-US</div>
+          <div className="mixer"><div className="panel-heading compact"><div><span className="eyebrow">Mix</span><h2>Levels</h2></div><button className="text-button" onClick={() => { setMaster(80); setInstrumentalVolume(100); setVocalVolume(65); }}>Reset</button></div><Slider label="Master" icon="◉" value={master} setValue={setMaster} /><Slider label="Instrumental" icon="◌" value={instrumentalVolume} setValue={setInstrumentalVolume} /><Slider label="Guide vocals" icon="◍" value={vocalVolume} setValue={setVocalVolume} /></div>
         </aside>
-
-        <section className="stage">
-          <div className="stage-glow glow-one" /><div className="stage-glow glow-two" />
-          <span className="stage-label">Live lyric view</span>
-          <div className="lyrics-display" aria-live="polite">
-            <p className="nearby previous">{previousCue?.text || ' '}</p>
-            <p className="active-lyric">{currentCue?.text || 'Load audio and press play'}</p>
-            <p className="nearby next">{nextCue?.text || 'Your lyrics will appear here in time'}</p>
-          </div>
-          <div className="cue-pill"><span className="pulse" /> Cue {currentCueIndex >= 0 ? currentCueIndex + 1 : 0} of {lyrics.length}</div>
-        </section>
-
-        <aside className="panel cue-panel">
-          <div className="panel-heading"><div><span className="eyebrow">Navigator</span><h2>Lyric cues</h2></div><span className="cue-count">{lyrics.length}</span></div>
-          <div className="cue-list">
-            {lyrics.map((cue, index) => (
-              <button key={`${cue.id}-${index}`} onClick={() => seekAll(cue.start)} className={`cue-row ${index === currentCueIndex ? 'current' : ''} ${index < currentCueIndex ? 'past' : ''}`}>
-                <span>{formatTime(cue.start)}</span><strong>{cue.text}</strong>
-              </button>
-            ))}
-          </div>
-        </aside>
+        <section className="stage"><div className="stage-glow glow-one" /><div className="stage-glow glow-two" /><span className="stage-label">Live lyric view</span><div className="lyrics-display" aria-live="polite"><p className="nearby previous">{previousCue?.text || ' '}</p><p className="active-lyric">{currentCue?.text || (generating ? 'Creating your karaoke track…' : 'Generate a song to begin')}</p><p className="nearby next">{nextCue?.text || 'Synchronized lyrics will appear here'}</p></div><div className="cue-pill"><span className="pulse" /> Cue {currentCueIndex >= 0 ? currentCueIndex + 1 : 0} of {lyrics.length}</div></section>
+        <aside className="panel cue-panel"><div className="panel-heading"><div><span className="eyebrow">Navigator</span><h2>Lyric cues</h2></div><span className="cue-count">{lyrics.length}</span></div><div className="cue-list">{lyrics.map((cue, index) => <button key={`${cue.id}-${index}`} onClick={() => seekAll(cue.start)} className={`cue-row ${index === currentCueIndex ? 'current' : ''} ${index < currentCueIndex ? 'past' : ''}`}><span>{formatTime(cue.start)}</span><strong>{cue.text}</strong></button>)}</div></aside>
       </section>
-
-      <footer className="transport">
-        <div className="transport-info"><span className="status-light" /><span>{status}</span></div>
-        <div className="transport-controls">
-          <button className="transport-button" onClick={() => jumpToCue(-1)} aria-label="Previous lyric cue">|◀</button>
-          <button className="play-button" onClick={togglePlayback} aria-label={isPlaying ? 'Pause' : 'Play'}>{isPlaying ? 'Ⅱ' : '▶'}</button>
-          <button className="transport-button" onClick={() => jumpToCue(1)} aria-label="Next lyric cue">▶|</button>
-        </div>
-        <div className="progress-wrap">
-          <span>{formatTime(currentTime)}</span>
-          <input aria-label="Track progress" type="range" min="0" max={duration || 1} step="0.01" value={Math.min(currentTime, duration || 0)} onChange={(event) => seekAll(Number(event.target.value))} />
-          <span>{formatTime(duration)}</span>
-        </div>
-      </footer>
+      <footer className="transport"><div className="transport-info"><span className="status-light" /><span>{status}</span></div><div className="transport-controls"><button className="transport-button" onClick={() => jumpToCue(-1)} aria-label="Previous lyric cue">|◀</button><button className="play-button" onClick={togglePlayback} aria-label={isPlaying ? 'Pause' : 'Play'}>{isPlaying ? 'Ⅱ' : '▶'}</button><button className="transport-button" onClick={() => jumpToCue(1)} aria-label="Next lyric cue">▶|</button></div><div className="progress-wrap"><span>{formatTime(currentTime)}</span><input aria-label="Track progress" type="range" min="0" max={duration || 1} step="0.01" value={Math.min(currentTime, duration || 0)} onChange={(event) => seekAll(Number(event.target.value))} /><span>{formatTime(duration)}</span></div></footer>
     </main>
   );
 }

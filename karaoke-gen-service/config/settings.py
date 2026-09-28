@@ -4,9 +4,18 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure-0yjs^x$cp4i4an-xor47ffa4rsipamjq2#)8t1x39mtlhi_y(t'
-DEBUG = True
-ALLOWED_HOSTS = []
+
+def env_bool(name, default=False):
+    return os.getenv(name, str(default)).lower() in {"1", "true", "yes", "on"}
+
+
+def env_list(name, default=""):
+    return [item.strip() for item in os.getenv(name, default).split(",") if item.strip()]
+
+
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-local-development-only")
+DEBUG = env_bool("DJANGO_DEBUG", True)
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -15,6 +24,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    "corsheaders",
     "drf_spectacular",
     "rest_framework",
     "catalog",
@@ -24,6 +34,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    "corsheaders.middleware.CorsMiddleware",
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -32,89 +43,52 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
+
 ROOT_URLCONF = 'config.urls'
-
-TEMPLATES = [
-    {
-        'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
-        'APP_DIRS': True,
-        'OPTIONS': {
-            'context_processors': [
-                'django.template.context_processors.request',
-                'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
-            ],
-        },
-    },
-]
-
+TEMPLATES = [{
+    'BACKEND': 'django.template.backends.django.DjangoTemplates',
+    'DIRS': [],
+    'APP_DIRS': True,
+    'OPTIONS': {'context_processors': [
+        'django.template.context_processors.request',
+        'django.contrib.auth.context_processors.auth',
+        'django.contrib.messages.context_processors.messages',
+    ]},
+}]
 WSGI_APPLICATION = 'config.wsgi.application'
 
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-    ],
+    "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework_simplejwt.authentication.JWTAuthentication"],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
-
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(
-        hours=int(os.getenv("JWT_ACCESS_TOKEN_HOURS", "24"))
-    ),
-    "REFRESH_TOKEN_LIFETIME": timedelta(
-        days=int(os.getenv("JWT_REFRESH_TOKEN_DAYS", "30"))
-    ),
+    "ACCESS_TOKEN_LIFETIME": timedelta(hours=int(os.getenv("JWT_ACCESS_TOKEN_HOURS", "24"))),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=int(os.getenv("JWT_REFRESH_TOKEN_DAYS", "30"))),
 }
-
 SPECTACULAR_SETTINGS = {
     "TITLE": "Karaoke Generator API",
-    "DESCRIPTION": (
-        "API for karaoke songs, playlists, libraries, "
-        "and audio-processing jobs."
-    ),
+    "DESCRIPTION": "API for karaoke songs, playlists, libraries, and audio-processing jobs.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
 }
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
-}
-
+DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': BASE_DIR / 'db.sqlite3'}}
 AUTH_USER_MODEL = "users.User"
 
-MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_URL = os.getenv("MEDIA_URL", "/media/")
+MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", str(BASE_DIR / "media")))
 
-LYRICS_ALIGN_SERVICE_URL = os.getenv(
-    "LYRICS_ALIGN_SERVICE_URL", "http://localhost:8001"
-)
-LYRICS_ALIGN_REQUEST_TIMEOUT_SECONDS = float(
-    os.getenv("LYRICS_ALIGN_REQUEST_TIMEOUT_SECONDS", "60")
-)
-LYRICS_ALIGN_JOB_TIMEOUT_SECONDS = float(
-    os.getenv("LYRICS_ALIGN_JOB_TIMEOUT_SECONDS", "3600")
-)
-LYRICS_ALIGN_POLL_INTERVAL_SECONDS = float(
-    os.getenv("LYRICS_ALIGN_POLL_INTERVAL_SECONDS", "2")
-)
+LYRICS_ALIGN_SERVICE_URL = os.getenv("LYRICS_ALIGN_SERVICE_URL", "http://localhost:8001")
+LYRICS_ALIGN_REQUEST_TIMEOUT_SECONDS = float(os.getenv("LYRICS_ALIGN_REQUEST_TIMEOUT_SECONDS", "60"))
+LYRICS_ALIGN_JOB_TIMEOUT_SECONDS = float(os.getenv("LYRICS_ALIGN_JOB_TIMEOUT_SECONDS", "3600"))
+LYRICS_ALIGN_POLL_INTERVAL_SECONDS = float(os.getenv("LYRICS_ALIGN_POLL_INTERVAL_SECONDS", "2"))
 
 AUTH_PASSWORD_VALIDATORS = [
-    {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
-    },
+    {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
 LANGUAGE_CODE = 'en-us'
