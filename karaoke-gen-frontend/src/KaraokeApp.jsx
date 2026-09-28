@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createSong, getLibraries, getProcessingJob, getSong, mediaUrl } from './api';
+import { createSong, deleteSong, getLibraries, getProcessingJob, getSong, mediaUrl, updateSong } from './api';
 import KaraokeTabs from './KaraokeTabs';
 import { GenerationForm, PlayerView } from './KaraokeViews';
 import LibraryView from './LibraryView';
@@ -75,8 +75,7 @@ export default function KaraokeApp() {
     }
   }, []);
   useEffect(() => {
-    const controller = new AbortController();
-    refreshLibraries(controller.signal);
+    const controller = new AbortController(); refreshLibraries(controller.signal);
     return () => controller.abort();
   }, [refreshLibraries]);
 
@@ -119,9 +118,7 @@ export default function KaraokeApp() {
     if (job?.status !== 'completed' || !job.song_id || song?.id === job.song_id) return undefined;
     const controller = new AbortController();
     getSong(job.song_id, controller.signal).then(async (completedSong) => {
-      setSong(completedSong);
-      await refreshLibraries();
-      setActiveTab('player');
+      setSong(completedSong); await refreshLibraries(); setActiveTab('player');
     }).catch((error) => {
       if (error.name !== 'AbortError') { setGenerationError(errorMessage(error)); setStatus('Could not load the completed song.'); }
     });
@@ -185,9 +182,34 @@ export default function KaraokeApp() {
     const tracks = [instrumentalRef.current, vocalRef.current].filter((audio) => audio?.src && Number.isFinite(audio.duration));
     setDuration(tracks.length ? Math.max(...tracks.map((audio) => audio.duration)) : 0);
   };
-  const previewLibrarySong = (selectedSong) => {
+  const loadSongIntoPlayer = (selectedSong) => {
     if (selectedSong.processing_status !== 'ready') { setLibraryError('This song is not ready to play.'); return; }
-    setLibraryError('Song actions are being prepared.');
+    if (!selectedSong.instrumental_file || !selectedSong.vocals_file || !selectedSong.lyrics_srt_file) { setLibraryError('This song is missing one or more media files.'); return; }
+    [instrumentalRef.current, vocalRef.current].forEach((audio) => audio?.pause());
+    cancelAnimationFrame(rafRef.current); setIsPlaying(false); loadedSongRef.current = null; setLyrics([]); setCurrentTime(0); setDuration(0); setGenerationError(''); setLibraryError(''); setSong(selectedSong); setActiveTab('player');
+  };
+  const editLibrarySong = async (selectedSong, changes) => {
+    setLibraryError('');
+    try {
+      const savedSong = await updateSong(selectedSong.id, changes);
+      setLibraries((current) => current.map((library) => ({ ...library, song_entries: (library.song_entries || []).map((entry) => entry.song.id === savedSong.id ? { ...entry, song: savedSong } : entry) })));
+      if (song?.id === savedSong.id) { setSong(savedSong); setStatus(`${savedSong.artist} — ${savedSong.title} is ready to play.`); }
+      return savedSong;
+    } catch (error) { setLibraryError(errorMessage(error)); throw error; }
+  };
+  const clearPlayer = () => {
+    [instrumentalRef.current, vocalRef.current].forEach((audio) => { audio?.pause(); audio?.removeAttribute('src'); audio?.load(); });
+    cancelAnimationFrame(rafRef.current); loadedSongRef.current = null; setSong(null); setLyrics([]); setCurrentTime(0); setDuration(0); setIsPlaying(false); setStatus('Choose a song from your library.');
+  };
+  const removeLibrarySong = async (selectedSong) => {
+    if (!window.confirm(`Delete "${selectedSong.title}" from your songs?`)) return;
+    setLibraryError('');
+    try {
+      await deleteSong(selectedSong.id);
+      const wasActive = song?.id === selectedSong.id || loadedSongRef.current === selectedSong.id;
+      await refreshLibraries();
+      if (wasActive) clearPlayer();
+    } catch (error) { setLibraryError(errorMessage(error)); throw error; }
   };
   const generationReady = title.trim() && artist.trim() && language.trim() && sourceFile;
   const generating = ACTIVE_JOB_STATES.includes(job?.status);
@@ -199,7 +221,7 @@ export default function KaraokeApp() {
       <header className="topbar"><div className="brand"><span className="brand-mark">♫</span><span>Karaoke<span className="accent">Gen</span></span></div><p>One song in. Your karaoke mix out.</p></header>
       <KaraokeTabs activeTab={activeTab} onSelect={setActiveTab} />
       <section id="player-panel" className="tab-panel player-panel" role="tabpanel" aria-labelledby="player-tab" hidden={activeTab !== 'player'}><PlayerView master={master} instrumentalVolume={instrumentalVolume} vocalVolume={vocalVolume} onMasterChange={setMaster} onInstrumentalChange={setInstrumentalVolume} onVocalChange={setVocalVolume} onReset={() => { setMaster(80); setInstrumentalVolume(100); setVocalVolume(65); }} previousCue={previousCue} currentCue={currentCue} nextCue={nextCue} currentCueIndex={currentCueIndex} lyrics={lyrics} onSeek={seekAll} status={status} isPlaying={isPlaying} onTogglePlayback={togglePlayback} onJumpToCue={jumpToCue} currentTime={currentTime} duration={duration} formatTime={formatTime} /></section>
-      <section id="library-panel" className="tab-panel library-panel" role="tabpanel" aria-labelledby="library-tab" hidden={activeTab !== 'library'}><div className="library-grid"><GenerationForm title={title} artist={artist} language={language} sourceFile={sourceFile} job={job} error={generationError} generating={generating} generationReady={generationReady} onTitleChange={setTitle} onArtistChange={setArtist} onLanguageChange={setLanguage} onFileChange={setSourceFile} onSubmit={submitGeneration} /><LibraryView libraries={libraries} loading={libraryLoading} error={libraryError} onRetry={() => refreshLibraries()} onLoad={previewLibrarySong} /></div></section>
+      <section id="library-panel" className="tab-panel library-panel" role="tabpanel" aria-labelledby="library-tab" hidden={activeTab !== 'library'}><div className="library-grid"><GenerationForm title={title} artist={artist} language={language} sourceFile={sourceFile} job={job} error={generationError} generating={generating} generationReady={generationReady} onTitleChange={setTitle} onArtistChange={setArtist} onLanguageChange={setLanguage} onFileChange={setSourceFile} onSubmit={submitGeneration} /><LibraryView libraries={libraries} loading={libraryLoading} error={libraryError} onRetry={() => refreshLibraries()} onLoad={loadSongIntoPlayer} onEdit={editLibrarySong} onDelete={removeLibrarySong} /></div></section>
     </main>
   );
 }
