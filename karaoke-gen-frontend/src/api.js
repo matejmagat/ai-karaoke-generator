@@ -89,14 +89,27 @@ export async function authenticatedRequest(path, options = {}, retry = true) {
   });
 
   if (response.status === 401 && retry) {
-    const access = await refreshAccessToken();
-    return authenticatedRequest(path, {
-      ...options,
-      headers: { ...options.headers, Authorization: `Bearer ${access}` },
-    }, false);
+    await refreshAccessToken();
+    return authenticatedRequest(path, options, false);
   }
 
   if (!response.ok) throw await responseError(response);
   if (response.status === 204) return null;
   return response.json();
+}
+
+export function createSong({ title, artist, language, file }) {
+  const form = new FormData();
+  form.append('title', title);
+  form.append('artist', artist);
+  form.append('language', language);
+  form.append('full_mix_file', file);
+  return authenticatedRequest('/api/songs/', { method: 'POST', body: form });
+}
+
+export function getProcessingJob(jobId, signal) {
+  return authenticatedRequest(
+    `/api/songs/processing-status/${encodeURIComponent(jobId)}/`,
+    { signal },
+  );
 }
