@@ -83,7 +83,7 @@ export default function KaraokeApp() {
 
   useEffect(() => {
     const jobId = job?.job_id;
-    if (!jobId || !ACTIVE_JOB_STATES.includes(job.status)) return undefined;
+    if (!jobId) return undefined;
 
     const controller = new AbortController();
     let timer;
