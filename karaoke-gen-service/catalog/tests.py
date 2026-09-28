@@ -26,10 +26,22 @@ class SongAPITests(APITestCase):
             username="admin", password="pass", is_staff=True
         )
         self.public_song = Song.objects.create(
-            title="Public Song", artist="Artist", is_public=True
+            title="Public Song",
+            artist="Artist",
+            is_public=True,
+            uploaded_by=self.other_user,
         )
         self.private_song = Song.objects.create(
-            title="Private Song", artist="Artist", is_public=False
+            title="Private Song",
+            artist="Artist",
+            is_public=False,
+            uploaded_by=self.other_user,
+        )
+        self.owned_private_song = Song.objects.create(
+            title="Owned Private Song",
+            artist="Artist",
+            is_public=False,
+            uploaded_by=self.user,
         )
 
     def authenticate(self, user=None):
@@ -40,16 +52,39 @@ class SongAPITests(APITestCase):
     def upload(name="full-mix.mp3", content=b"audio"):
         return SimpleUploadedFile(name, content, content_type="audio/mpeg")
 
-    def test_list_songs_is_public_and_hides_private_songs(self):
+    def test_anonymous_list_only_includes_public_songs(self):
         response = self.client.get(reverse("song-list"))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         ids = {item["id"] for item in response.data}
         self.assertIn(str(self.public_song.pk), ids)
         self.assertNotIn(str(self.private_song.pk), ids)
+        self.assertNotIn(str(self.owned_private_song.pk), ids)
+
+    def test_authenticated_list_includes_public_and_owned_private_songs(self):
+        self.authenticate()
+        response = self.client.get(reverse("song-list"))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = {item["id"] for item in response.data}
+        self.assertIn(str(self.public_song.pk), ids)
+        self.assertIn(str(self.owned_private_song.pk), ids)
+        self.assertNotIn(str(self.private_song.pk), ids)
 
     def test_retrieve_public_song(self):
         response = self.client.get(reverse("song-detail", args=[self.public_song.pk]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_regular_user_can_retrieve_owned_private_song(self):
+        self.authenticate()
+        response = self.client.get(
+            reverse("song-detail", args=[self.owned_private_song.pk])
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], str(self.owned_private_song.pk))
+
+    def test_regular_user_cannot_retrieve_another_users_private_song(self):
+        self.authenticate()
+        response = self.client.get(reverse("song-detail", args=[self.private_song.pk]))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_create_song_requires_jwt(self):
         response = self.client.post(
@@ -223,6 +258,79 @@ class SongAPITests(APITestCase):
                     position=1,
                 ).exists()
             )
+
+    def test_regular_user_can_update_owned_private_song(self):
+        self.authenticate()
+        response = self.client.put(
+            reverse("song-detail", args=[self.owned_private_song.pk]),
+            {"title": "Updated", "artist": "Artist", "is_public": False},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.owned_private_song.refresh_from_db()
+        self.assertEqual(self.owned_private_song.title, "Updated")
+
+    def test_regular_user_can_partially_update_owned_private_song(self):
+        self.authenticate()
+        response = self.client.patch(
+            reverse("song-detail", args=[self.owned_private_song.pk]),
+            {"title": "Patched"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.owned_private_song.refresh_from_db()
+        self.assertEqual(self.owned_private_song.title, "Patched")
+
+    def test_regular_user_can_delete_owned_private_song(self):
+        self.authenticate()
+        response = self.client.delete(
+            reverse("song-detail", args=[self.owned_private_song.pk])
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(
+            Song.objects.filter(pk=self.owned_private_song.pk).exists()
+        )
+
+    def test_regular_user_cannot_update_another_users_public_song(self):
+        self.authenticate()
+        response = self.client.put(
+            reverse("song-detail", args=[self.public_song.pk]),
+            {"title": "Updated", "artist": "Artist", "is_public": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_regular_user_cannot_partially_update_another_users_public_song(self):
+        self.authenticate()
+        response = self.client.patch(
+            reverse("song-detail", args=[self.public_song.pk]),
+            {"title": "Patched"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_regular_user_cannot_delete_another_users_public_song(self):
+        self.authenticate()
+        response = self.client.delete(
+            reverse("song-detail", args=[self.public_song.pk])
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(Song.objects.filter(pk=self.public_song.pk).exists())
+
+    def test_regular_user_cannot_modify_another_users_private_song(self):
+        self.authenticate()
+        response = self.client.patch(
+            reverse("song-detail", args=[self.private_song.pk]),
+            {"title": "Patched"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_anonymous_user_cannot_delete_public_song(self):
+        response = self.client.delete(
+            reverse("song-detail", args=[self.public_song.pk])
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_admin_can_update_song(self):
         self.authenticate(self.admin)
