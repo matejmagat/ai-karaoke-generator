@@ -1,9 +1,7 @@
 const DEFAULT_API_BASE_URL = 'http://localhost:8000';
 const SESSION_KEY = 'karaoke-gen-session';
 
-export const API_BASE_URL = (
-  process.env.REACT_APP_API_BASE_URL || DEFAULT_API_BASE_URL
-).replace(/\/$/, '');
+export const API_BASE_URL = (process.env.REACT_APP_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/$/, '');
 
 export function loadSession() {
   try {
@@ -14,9 +12,7 @@ export function loadSession() {
   }
 }
 
-export function clearSession() {
-  localStorage.removeItem(SESSION_KEY);
-}
+export function clearSession() { localStorage.removeItem(SESSION_KEY); }
 
 function saveSession(tokens, username) {
   const previous = loadSession();
@@ -45,29 +41,21 @@ async function publicJson(path, options) {
 }
 
 export async function login(credentials) {
-  const tokens = await publicJson('/api/auth/login/', {
-    method: 'POST',
-    body: JSON.stringify(credentials),
-  });
+  const tokens = await publicJson('/api/auth/login/', { method: 'POST', body: JSON.stringify(credentials) });
   return saveSession(tokens, credentials.username);
 }
 
 export async function register(details) {
-  const result = await publicJson('/api/auth/register/', {
-    method: 'POST',
-    body: JSON.stringify(details),
-  });
+  const result = await publicJson('/api/auth/register/', { method: 'POST', body: JSON.stringify(details) });
   return saveSession(result, result.user?.username || details.username);
 }
 
 async function refreshAccessToken() {
   const session = loadSession();
   if (!session?.refresh) throw new Error('Your session has expired. Please sign in again.');
-
   try {
     const tokens = await publicJson('/api/auth/token/refresh/', {
-      method: 'POST',
-      body: JSON.stringify({ refresh: session.refresh }),
+      method: 'POST', body: JSON.stringify({ refresh: session.refresh }),
     });
     return saveSession(tokens, session.username).access;
   } catch (error) {
@@ -79,20 +67,14 @@ async function refreshAccessToken() {
 export async function authenticatedRequest(path, options = {}, retry = true) {
   const session = loadSession();
   if (!session?.access) throw new Error('Sign in to continue.');
-
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
-    headers: {
-      ...options.headers,
-      Authorization: `Bearer ${session.access}`,
-    },
+    headers: { ...options.headers, Authorization: `Bearer ${session.access}` },
   });
-
   if (response.status === 401 && retry) {
     await refreshAccessToken();
     return authenticatedRequest(path, options, false);
   }
-
   if (!response.ok) throw await responseError(response);
   if (response.status === 204) return null;
   return response.json();
@@ -108,8 +90,13 @@ export function createSong({ title, artist, language, file }) {
 }
 
 export function getProcessingJob(jobId, signal) {
-  return authenticatedRequest(
-    `/api/songs/processing-status/${encodeURIComponent(jobId)}/`,
-    { signal },
-  );
+  return authenticatedRequest(`/api/songs/processing-status/${encodeURIComponent(jobId)}/`, { signal });
+}
+
+export function getSong(songId, signal) {
+  return authenticatedRequest(`/api/songs/${encodeURIComponent(songId)}/`, { signal });
+}
+
+export function mediaUrl(value) {
+  return value ? new URL(value, `${API_BASE_URL}/`).toString() : '';
 }

@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { createSong, getProcessingJob } from './api';
+import { createSong, getProcessingJob, getSong, mediaUrl } from './api';
 import './KaraokeApp.css';
 
-const INITIAL_LYRICS = [];
 const ACTIVE_JOB_STATES = ['queued', 'processing'];
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const formatTime = (seconds = 0) => {
@@ -18,7 +17,7 @@ function parseTimestamp(timestamp) {
   return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds) + Number(milliseconds.padEnd(3, '0').slice(0, 3)) / 1000;
 }
 
-function parseSrt(source) {
+export function parseSrt(source) {
   const normalized = source.replace(/^\uFEFF/, '').replace(/\r/g, '').trim();
   if (!normalized) return [];
   return normalized.split(/\n{2,}/).map((block, index) => {
@@ -48,14 +47,16 @@ export default function KaraokeApp() {
   const instrumentalRef = useRef(null);
   const vocalRef = useRef(null);
   const rafRef = useRef(null);
+  const loadedSongRef = useRef(null);
 
   const [title, setTitle] = useState('');
   const [artist, setArtist] = useState('');
   const [language, setLanguage] = useState('en');
   const [sourceFile, setSourceFile] = useState(null);
   const [job, setJob] = useState(null);
+  const [song, setSong] = useState(null);
   const [generationError, setGenerationError] = useState('');
-  const [lyrics, setLyrics] = useState(INITIAL_LYRICS);
+  const [lyrics, setLyrics] = useState([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -70,7 +71,6 @@ export default function KaraokeApp() {
     const next = lyrics.findIndex((cue) => cue.start > currentTime);
     return next > 0 ? next - 1 : next;
   }, [lyrics, currentTime]);
-
   const currentCue = currentCueIndex >= 0 ? lyrics[currentCueIndex] : null;
   const previousCue = currentCueIndex > 0 ? lyrics[currentCueIndex - 1] : null;
   const nextCue = currentCueIndex >= 0 && currentCueIndex < lyrics.length - 1 ? lyrics[currentCueIndex + 1] : null;
@@ -105,15 +105,64 @@ export default function KaraokeApp() {
     return () => { clearTimeout(timer); controller.abort(); };
   }, [job?.job_id, job?.status, job?.updated_at]);
 
+  useEffect(() => {
+    if (job?.status !== 'completed' || !job.song_id || song?.id === job.song_id) return undefined;
+    const controller = new AbortController();
+    getSong(job.song_id, controller.signal)
+      .then(setSong)
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          setGenerationError(errorMessage(error));
+          setStatus('Could not load the completed song.');
+        }
+      });
+    return () => controller.abort();
+  }, [job?.status, job?.song_id, song?.id]);
+
+  const seekAll = (time) => {
+    const safeTime = Math.max(0, time);
+    [instrumentalRef.current, vocalRef.current].forEach((audio) => {
+      if (audio?.src) audio.currentTime = safeTime;
+    });
+    setCurrentTime(safeTime);
+  };
+
+  useEffect(() => {
+    if (!song?.id || loadedSongRef.current === song.id) return undefined;
+    const controller = new AbortController();
+    const loadGeneratedSong = async () => {
+      try {
+        if (!song.instrumental_file || !song.vocals_file || !song.lyrics_srt_file) {
+          throw new Error('The generated song is missing one or more output files.');
+        }
+        instrumentalRef.current.src = mediaUrl(song.instrumental_file);
+        vocalRef.current.src = mediaUrl(song.vocals_file);
+        instrumentalRef.current.load();
+        vocalRef.current.load();
+        const response = await fetch(mediaUrl(song.lyrics_srt_file), { signal: controller.signal });
+        if (!response.ok) throw new Error('Could not load generated lyrics.');
+        const parsed = parseSrt(await response.text());
+        if (!parsed.length) throw new Error('Generated SRT has no usable lyric cues.');
+        setLyrics(parsed);
+        seekAll(0);
+        loadedSongRef.current = song.id;
+        setStatus(`${song.artist} — ${song.title} is ready to play.`);
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          setGenerationError(error.message || 'Could not load generated files.');
+          setStatus('Generated media is unavailable.');
+        }
+      }
+    };
+    loadGeneratedSong();
+    return () => controller.abort();
+  }, [song]);
+
   const submitGeneration = async () => {
-    setGenerationError('');
-    setJob(null);
-    setLyrics([]);
+    setGenerationError(''); setJob(null); setSong(null); setLyrics([]); loadedSongRef.current = null;
     setStatus('Uploading full mix…');
     try {
-      const created = await createSong({
-        title: title.trim(), artist: artist.trim(), language: language.trim(), file: sourceFile,
-      });
+      const created = await createSong({ title: title.trim(), artist: artist.trim(), language: language.trim(), file: sourceFile });
       setJob(created);
       setStatus(created.status === 'processing' ? 'Processing song…' : 'Generation queued…');
     } catch (error) {
@@ -130,32 +179,20 @@ export default function KaraokeApp() {
     if (!leader.paused) rafRef.current = requestAnimationFrame(syncClock);
   };
 
-  const seekAll = (time) => {
-    const safeTime = Math.max(0, time);
-    [instrumentalRef.current, vocalRef.current].forEach((audio) => {
-      if (audio?.src) audio.currentTime = safeTime;
-    });
-    setCurrentTime(safeTime);
-  };
-
   const togglePlayback = async () => {
     const sources = [instrumentalRef.current, vocalRef.current].filter((audio) => audio?.src);
     if (!sources.length) { setStatus('Generate a song before pressing play.'); return; }
     try {
       if (isPlaying) {
-        sources.forEach((audio) => audio.pause());
-        cancelAnimationFrame(rafRef.current);
-        setIsPlaying(false);
+        sources.forEach((audio) => audio.pause()); cancelAnimationFrame(rafRef.current); setIsPlaying(false);
       } else {
         const leaderTime = sources[0].currentTime;
         sources.slice(1).forEach((audio) => { audio.currentTime = leaderTime; });
         await Promise.all(sources.map((audio) => audio.play()));
-        setIsPlaying(true);
-        rafRef.current = requestAnimationFrame(syncClock);
+        setIsPlaying(true); rafRef.current = requestAnimationFrame(syncClock);
       }
     } catch {
-      setStatus('The browser could not start playback. Reload the generated audio.');
-      setIsPlaying(false);
+      setStatus('The browser could not start playback. Reload the generated audio.'); setIsPlaying(false);
     }
   };
 
@@ -163,8 +200,7 @@ export default function KaraokeApp() {
     if (!lyrics.length) return;
     const fallbackIndex = lyrics.findIndex((cue) => cue.start > currentTime);
     const base = currentCueIndex >= 0 ? currentCueIndex : Math.max(0, fallbackIndex);
-    const target = lyrics[clamp(base + direction, 0, lyrics.length - 1)];
-    seekAll(target.start);
+    seekAll(lyrics[clamp(base + direction, 0, lyrics.length - 1)].start);
   };
 
   const onLoadedMetadata = () => {
@@ -192,10 +228,7 @@ export default function KaraokeApp() {
           {job && <div className={`job-status ${job.status}`}><strong>{job.status}</strong><span>Job {job.job_id}</span></div>}
           {generationError && <div className="generation-error" role="alert">{generationError}</div>}
           <div className="format-note">MP3 or WAV · language uses a code such as en, hr, or en-US</div>
-          <div className="mixer">
-            <div className="panel-heading compact"><div><span className="eyebrow">Mix</span><h2>Levels</h2></div><button className="text-button" onClick={() => { setMaster(80); setInstrumentalVolume(100); setVocalVolume(65); }}>Reset</button></div>
-            <Slider label="Master" icon="◉" value={master} setValue={setMaster} /><Slider label="Instrumental" icon="◌" value={instrumentalVolume} setValue={setInstrumentalVolume} /><Slider label="Guide vocals" icon="◍" value={vocalVolume} setValue={setVocalVolume} />
-          </div>
+          <div className="mixer"><div className="panel-heading compact"><div><span className="eyebrow">Mix</span><h2>Levels</h2></div><button className="text-button" onClick={() => { setMaster(80); setInstrumentalVolume(100); setVocalVolume(65); }}>Reset</button></div><Slider label="Master" icon="◉" value={master} setValue={setMaster} /><Slider label="Instrumental" icon="◌" value={instrumentalVolume} setValue={setInstrumentalVolume} /><Slider label="Guide vocals" icon="◍" value={vocalVolume} setValue={setVocalVolume} /></div>
         </aside>
         <section className="stage"><div className="stage-glow glow-one" /><div className="stage-glow glow-two" /><span className="stage-label">Live lyric view</span><div className="lyrics-display" aria-live="polite"><p className="nearby previous">{previousCue?.text || ' '}</p><p className="active-lyric">{currentCue?.text || (generating ? 'Creating your karaoke track…' : 'Generate a song to begin')}</p><p className="nearby next">{nextCue?.text || 'Synchronized lyrics will appear here'}</p></div><div className="cue-pill"><span className="pulse" /> Cue {currentCueIndex >= 0 ? currentCueIndex + 1 : 0} of {lyrics.length}</div></section>
         <aside className="panel cue-panel"><div className="panel-heading"><div><span className="eyebrow">Navigator</span><h2>Lyric cues</h2></div><span className="cue-count">{lyrics.length}</span></div><div className="cue-list">{lyrics.map((cue, index) => <button key={`${cue.id}-${index}`} onClick={() => seekAll(cue.start)} className={`cue-row ${index === currentCueIndex ? 'current' : ''} ${index < currentCueIndex ? 'past' : ''}`}><span>{formatTime(cue.start)}</span><strong>{cue.text}</strong></button>)}</div></aside>
