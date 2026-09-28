@@ -33,6 +33,16 @@ test('shows generation in Library and playback controls in Player', async () => 
   expect(screen.getByRole('tab', { name: 'Library' })).toHaveAttribute('aria-selected', 'true'); expect(screen.getByPlaceholderText('Song title')).toBeVisible(); expect(screen.getByText('Your library is empty')).toBeInTheDocument();
 });
 
+test('shows library loading and retryable error states', async () => {
+  getLibraries.mockReturnValueOnce(new Promise(() => {}));
+  const { unmount } = render(<KaraokeApp />); fireEvent.click(screen.getByRole('tab', { name: 'Library' }));
+  expect(screen.getByText('Loading library…')).toBeInTheDocument(); unmount();
+  getLibraries.mockRejectedValueOnce(new Error('Library unavailable')).mockResolvedValueOnce([]);
+  render(<KaraokeApp />); await flushPromises(); fireEvent.click(screen.getByRole('tab', { name: 'Library' }));
+  expect(screen.getByRole('alert')).toHaveTextContent('Library unavailable'); fireEvent.click(screen.getByRole('button', { name: 'Retry' })); await flushPromises();
+  expect(getLibraries).toHaveBeenCalledTimes(3); expect(screen.getByText('Your library is empty')).toBeInTheDocument();
+});
+
 test('renders nested songs and loads a ready song into the player', async () => {
   await openPopulatedLibrary();
   expect(screen.getByText('Test Song')).toBeInTheDocument(); expect(screen.getByText('Test Artist')).toBeInTheDocument();
@@ -42,21 +52,40 @@ test('renders nested songs and loads a ready song into the player', async () => 
   expect(await screen.findByText('Hello')).toBeInTheDocument();
 });
 
+test('disables loading for non-ready and incomplete songs', async () => {
+  getLibraries.mockResolvedValue([{ id: 1, name: 'My Library', song_count: 2, song_entries: [
+    { id: 10, song: { ...readySong, id: 'processing', title: 'Processing Song', processing_status: 'processing' } },
+    { id: 11, song: { ...readySong, id: 'incomplete', title: 'Incomplete Song', lyrics_srt_file: null } },
+  ] }]);
+  render(<KaraokeApp />); await flushPromises(); fireEvent.click(screen.getByRole('tab', { name: 'Library' }));
+  expect(screen.getByText('processing')).toBeInTheDocument(); screen.getAllByRole('button', { name: 'Load' }).forEach((button) => expect(button).toBeDisabled());
+});
+
 test('edits song metadata and updates the card', async () => {
   await openPopulatedLibrary(); fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-  fireEvent.change(screen.getByLabelText('Title for Test Song'), { target: { value: 'Updated Song' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(updateSong).toHaveBeenCalledWith('song-1', { title: 'Updated Song' }));
-  expect(await screen.findByText('Updated Song')).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Title for Test Song'), { target: { value: 'Updated Song' } }); fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(updateSong).toHaveBeenCalledWith('song-1', { title: 'Updated Song' })); expect(await screen.findByText('Updated Song')).toBeInTheDocument();
+});
+
+test('keeps the edit form and original card data when PATCH fails', async () => {
+  updateSong.mockRejectedValueOnce(new Error('Update failed')); await openPopulatedLibrary(); fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+  fireEvent.change(screen.getByLabelText('Title for Test Song'), { target: { value: 'Unsaved Song' } }); fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(screen.getAllByRole('alert').some((alert) => alert.textContent.includes('Update failed'))).toBe(true));
+  expect(screen.getByLabelText('Title for Test Song')).toHaveValue('Unsaved Song');
 });
 
 test('requires confirmation before deleting a song', async () => {
-  getLibraries.mockResolvedValueOnce(libraryResponse()).mockResolvedValueOnce([]);
-  jest.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+  getLibraries.mockResolvedValueOnce(libraryResponse()).mockResolvedValueOnce([]); jest.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
   render(<KaraokeApp />); await flushPromises(); fireEvent.click(screen.getByRole('tab', { name: 'Library' }));
   fireEvent.click(screen.getByRole('button', { name: 'Delete song' })); expect(deleteSong).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'Delete song' })); await waitFor(() => expect(deleteSong).toHaveBeenCalledWith('song-1'));
-  await waitFor(() => expect(screen.getByText('Your library is empty')).toBeInTheDocument());
+  fireEvent.click(screen.getByRole('button', { name: 'Delete song' })); await waitFor(() => expect(deleteSong).toHaveBeenCalledWith('song-1')); await waitFor(() => expect(screen.getByText('Your library is empty')).toBeInTheDocument());
+});
+
+test('deleting the active song clears loaded playback state', async () => {
+  getLibraries.mockResolvedValueOnce(libraryResponse()).mockResolvedValueOnce([]); jest.spyOn(window, 'confirm').mockReturnValue(true);
+  render(<KaraokeApp />); await flushPromises(); fireEvent.click(screen.getByRole('tab', { name: 'Library' })); fireEvent.click(screen.getByRole('button', { name: 'Load' })); await flushPromises(); await screen.findByText('Hello');
+  fireEvent.click(screen.getByRole('tab', { name: 'Library' })); fireEvent.click(screen.getByRole('button', { name: 'Delete song' })); await waitFor(() => expect(deleteSong).toHaveBeenCalledWith('song-1'));
+  expect(screen.getByText('Choose a song from your library.')).toBeInTheDocument(); document.querySelectorAll('audio').forEach((audio) => expect(audio).not.toHaveAttribute('src'));
 });
 
 test('keeps polling active jobs, loads completion, and refreshes the library', async () => {

@@ -47,7 +47,7 @@ function LibrarySongCard({ song, onLoad, onEdit, onDelete }) {
         <form className="song-edit-form" onSubmit={save}>
           <label>Title<input aria-label={`Title for ${song.title}`} value={draft.title} disabled={saving} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
           <label>Artist<input aria-label={`Artist for ${song.title}`} value={draft.artist} disabled={saving} onChange={(event) => setDraft({ ...draft, artist: event.target.value })} /></label>
-          <label>Duration (seconds)<input aria-label={`Duration for ${song.title}`} type="number" min="0" step="0.01" value={draft.duration_seconds} disabled={saving} onChange={(event) => setDraft({ ...draft, duration_seconds: event.target.value })} /></label>
+          <label>Duration (seconds)<input aria-label={`Duration for ${song.title}`} type="number" min="0" step="1" value={draft.duration_seconds} disabled={saving} onChange={(event) => setDraft({ ...draft, duration_seconds: event.target.value })} /></label>
           <label className="public-toggle"><input aria-label={`Public ${song.title}`} type="checkbox" checked={draft.is_public} disabled={saving} onChange={(event) => setDraft({ ...draft, is_public: event.target.checked })} /> Public song</label>
           {actionError && <p className="card-error" role="alert">{actionError}</p>}
           <div className="song-card-actions"><button type="submit" className="primary-small" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button><button type="button" disabled={saving} onClick={() => setEditing(false)}>Cancel</button></div>
