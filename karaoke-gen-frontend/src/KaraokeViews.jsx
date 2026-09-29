@@ -1,4 +1,5 @@
 import React from 'react';
+import LyricsDisplay, { LyricsSettings } from './LyricsDisplay';
 
 export function GenerationForm({
   title, artist, language, sourceFile, job, error, generating, generationReady,
@@ -22,7 +23,7 @@ export function GenerationForm({
   );
 }
 
-export function Mixer({ master, instrumentalVolume, vocalVolume, onMasterChange, onInstrumentalChange, onVocalChange, onReset }) {
+export function Mixer({ master, instrumentalVolume, vocalVolume, onMasterChange, onInstrumentalChange, onVocalChange, onReset, lyricsView, onLyricsViewChange, onLyricsViewReset }) {
   return (
     <aside className="panel mixer-panel">
       <div className="mixer">
@@ -31,20 +32,21 @@ export function Mixer({ master, instrumentalVolume, vocalVolume, onMasterChange,
         <Slider label="Instrumental" icon="◌" value={instrumentalVolume} setValue={onInstrumentalChange} />
         <Slider label="Guide vocals" icon="◍" value={vocalVolume} setValue={onVocalChange} />
       </div>
+      {lyricsView && <LyricsSettings settings={lyricsView} onChange={onLyricsViewChange} onReset={onLyricsViewReset} />}
     </aside>
   );
 }
 
 export function PlayerView({
   master, instrumentalVolume, vocalVolume, onMasterChange, onInstrumentalChange, onVocalChange, onReset,
-  previousCue, currentCue, nextCue, currentCueIndex, lyrics, onSeek, status, isPlaying, onTogglePlayback,
+  lyricsView, onLyricsViewChange, onLyricsViewReset, currentCueIndex, lyrics, onSeek, status, isPlaying, onTogglePlayback,
   onJumpToCue, currentTime, duration, formatTime,
 }) {
   return (
     <>
       <section className="workspace player-workspace">
-        <Mixer master={master} instrumentalVolume={instrumentalVolume} vocalVolume={vocalVolume} onMasterChange={onMasterChange} onInstrumentalChange={onInstrumentalChange} onVocalChange={onVocalChange} onReset={onReset} />
-        <section className="stage"><div className="stage-glow glow-one" /><div className="stage-glow glow-two" /><span className="stage-label">Live lyric view</span><div className="lyrics-display" aria-live="polite"><p className="nearby previous">{previousCue?.text || ' '}</p><p className="active-lyric">{currentCue?.text || 'Choose or generate a song to begin'}</p><p className="nearby next">{nextCue?.text || 'Synchronized lyrics will appear here'}</p></div><div className="cue-pill"><span className="pulse" /> Cue {currentCueIndex >= 0 ? currentCueIndex + 1 : 0} of {lyrics.length}</div></section>
+        <Mixer master={master} instrumentalVolume={instrumentalVolume} vocalVolume={vocalVolume} onMasterChange={onMasterChange} onInstrumentalChange={onInstrumentalChange} onVocalChange={onVocalChange} onReset={onReset} lyricsView={lyricsView} onLyricsViewChange={onLyricsViewChange} onLyricsViewReset={onLyricsViewReset} />
+        <section className="stage"><div className="stage-glow glow-one" /><div className="stage-glow glow-two" /><span className="stage-label">Live lyric view</span><LyricsDisplay lyrics={lyrics} currentCueIndex={currentCueIndex} settings={lyricsView} onSeek={onSeek} /><div className="cue-pill"><span className="pulse" /> Cue {currentCueIndex >= 0 ? currentCueIndex + 1 : 0} of {lyrics.length}</div></section>
         <aside className="panel cue-panel"><div className="panel-heading"><div><span className="eyebrow">Navigator</span><h2>Lyric cues</h2></div><span className="cue-count">{lyrics.length}</span></div><div className="cue-list">{lyrics.map((cue, index) => <button type="button" key={`${cue.id}-${index}`} onClick={() => onSeek(cue.start)} className={`cue-row ${index === currentCueIndex ? 'current' : ''} ${index < currentCueIndex ? 'past' : ''}`}><span>{formatTime(cue.start)}</span><strong>{cue.text}</strong></button>)}</div></aside>
       </section>
       <footer className="transport"><div className="transport-info"><span className="status-light" /><span>{status}</span></div><div className="transport-controls"><button type="button" className="transport-button" onClick={() => onJumpToCue(-1)} aria-label="Previous lyric cue">|◀</button><button type="button" className="play-button" onClick={onTogglePlayback} aria-label={isPlaying ? 'Pause' : 'Play'}>{isPlaying ? 'Ⅱ' : '▶'}</button><button type="button" className="transport-button" onClick={() => onJumpToCue(1)} aria-label="Next lyric cue">▶|</button></div><div className="progress-wrap"><span>{formatTime(currentTime)}</span><input aria-label="Track progress" type="range" min="0" max={duration || 1} step="0.01" value={Math.min(currentTime, duration || 0)} onChange={(event) => onSeek(Number(event.target.value))} /><span>{formatTime(duration)}</span></div></footer>

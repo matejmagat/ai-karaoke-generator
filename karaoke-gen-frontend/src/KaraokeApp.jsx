@@ -3,6 +3,7 @@ import { createSong, deleteSong, getLibraries, getProcessingJob, getSong, mediaU
 import KaraokeTabs from './KaraokeTabs';
 import { GenerationForm, PlayerView } from './KaraokeViews';
 import LibraryView from './LibraryView';
+import { DEFAULT_LYRICS_VIEW, loadLyricsView, saveLyricsView } from './LyricsDisplay';
 import './KaraokeApp.css';
 
 const ACTIVE_JOB_STATES = ['queued', 'processing'];
@@ -62,6 +63,8 @@ export default function KaraokeApp() {
   const [instrumentalVolume, setInstrumentalVolume] = useState(100);
   const [vocalVolume, setVocalVolume] = useState(65);
   const [status, setStatus] = useState('Choose a song from your library.');
+  const [lyricsView, setLyricsView] = useState(() => loadLyricsView());
+  useEffect(() => { saveLyricsView(lyricsView); }, [lyricsView]);
 
   const refreshLibraries = useCallback(async (signal) => {
     setLibraryLoading(true); setLibraryError('');
@@ -85,9 +88,6 @@ export default function KaraokeApp() {
     const next = lyrics.findIndex((cue) => cue.start > currentTime);
     return next > 0 ? next - 1 : next;
   }, [lyrics, currentTime]);
-  const currentCue = currentCueIndex >= 0 ? lyrics[currentCueIndex] : null;
-  const previousCue = currentCueIndex > 0 ? lyrics[currentCueIndex - 1] : null;
-  const nextCue = currentCueIndex >= 0 && currentCueIndex < lyrics.length - 1 ? lyrics[currentCueIndex + 1] : null;
 
   useEffect(() => {
     if (instrumentalRef.current) instrumentalRef.current.volume = (master / 100) * (instrumentalVolume / 100);
@@ -220,7 +220,7 @@ export default function KaraokeApp() {
       <audio ref={instrumentalRef} onLoadedMetadata={onLoadedMetadata} onEnded={() => setIsPlaying(false)} /><audio ref={vocalRef} onLoadedMetadata={onLoadedMetadata} />
       <header className="topbar"><div className="brand"><span className="brand-mark">♫</span><span>Karaoke<span className="accent">Gen</span></span></div><p>One song in. Your karaoke mix out.</p></header>
       <KaraokeTabs activeTab={activeTab} onSelect={setActiveTab} />
-      <section id="player-panel" className="tab-panel player-panel" role="tabpanel" aria-labelledby="player-tab" hidden={activeTab !== 'player'}><PlayerView master={master} instrumentalVolume={instrumentalVolume} vocalVolume={vocalVolume} onMasterChange={setMaster} onInstrumentalChange={setInstrumentalVolume} onVocalChange={setVocalVolume} onReset={() => { setMaster(80); setInstrumentalVolume(100); setVocalVolume(65); }} previousCue={previousCue} currentCue={currentCue} nextCue={nextCue} currentCueIndex={currentCueIndex} lyrics={lyrics} onSeek={seekAll} status={status} isPlaying={isPlaying} onTogglePlayback={togglePlayback} onJumpToCue={jumpToCue} currentTime={currentTime} duration={duration} formatTime={formatTime} /></section>
+      <section id="player-panel" className="tab-panel player-panel" role="tabpanel" aria-labelledby="player-tab" hidden={activeTab !== 'player'}><PlayerView master={master} instrumentalVolume={instrumentalVolume} vocalVolume={vocalVolume} onMasterChange={setMaster} onInstrumentalChange={setInstrumentalVolume} onVocalChange={setVocalVolume} onReset={() => { setMaster(80); setInstrumentalVolume(100); setVocalVolume(65); }} lyricsView={lyricsView} onLyricsViewChange={setLyricsView} onLyricsViewReset={() => setLyricsView({ ...DEFAULT_LYRICS_VIEW })} currentCueIndex={currentCueIndex} lyrics={lyrics} onSeek={seekAll} status={status} isPlaying={isPlaying} onTogglePlayback={togglePlayback} onJumpToCue={jumpToCue} currentTime={currentTime} duration={duration} formatTime={formatTime} /></section>
       <section id="library-panel" className="tab-panel library-panel" role="tabpanel" aria-labelledby="library-tab" hidden={activeTab !== 'library'}><div className="library-grid"><GenerationForm title={title} artist={artist} language={language} sourceFile={sourceFile} job={job} error={generationError} generating={generating} generationReady={generationReady} onTitleChange={setTitle} onArtistChange={setArtist} onLanguageChange={setLanguage} onFileChange={setSourceFile} onSubmit={submitGeneration} /><LibraryView libraries={libraries} loading={libraryLoading} error={libraryError} onRetry={() => refreshLibraries()} onLoad={loadSongIntoPlayer} onEdit={editLibrarySong} onDelete={removeLibrarySong} /></div></section>
     </main>
   );
