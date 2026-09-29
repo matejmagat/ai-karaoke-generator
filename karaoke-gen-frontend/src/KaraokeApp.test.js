@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import KaraokeApp from './KaraokeApp';
 import { createSong, deleteSong, getLibraries, getProcessingJob, getSong, updateSong } from './api';
 
@@ -49,7 +49,7 @@ test('renders nested songs and loads a ready song into the player', async () => 
   fireEvent.click(screen.getByRole('button', { name: 'Load' })); await flushPromises();
   expect(screen.getByRole('tab', { name: 'Player' })).toHaveAttribute('aria-selected', 'true');
   expect(global.fetch).toHaveBeenCalledWith('http://localhost:8000/media/lyrics.srt', expect.objectContaining({ signal: expect.any(AbortSignal) }));
-  expect(await screen.findByText('Hello')).toBeInTheDocument();
+  expect(await within(screen.getByTestId('lyrics-display')).findByText('Hello')).toBeInTheDocument();
 });
 
 test('disables loading for non-ready and incomplete songs', async () => {
@@ -83,9 +83,9 @@ test('requires confirmation before deleting a song', async () => {
 
 test('deleting the active song clears loaded playback state', async () => {
   getLibraries.mockResolvedValueOnce(libraryResponse()).mockResolvedValueOnce([]); jest.spyOn(window, 'confirm').mockReturnValue(true);
-  render(<KaraokeApp />); await flushPromises(); fireEvent.click(screen.getByRole('tab', { name: 'Library' })); fireEvent.click(screen.getByRole('button', { name: 'Load' })); await flushPromises(); await screen.findByText('Hello');
+  render(<KaraokeApp />); await flushPromises(); fireEvent.click(screen.getByRole('tab', { name: 'Library' })); fireEvent.click(screen.getByRole('button', { name: 'Load' })); await flushPromises(); await within(screen.getByTestId('lyrics-display')).findByText('Hello');
   fireEvent.click(screen.getByRole('tab', { name: 'Library' })); fireEvent.click(screen.getByRole('button', { name: 'Delete song' })); await waitFor(() => expect(deleteSong).toHaveBeenCalledWith('song-1'));
-  expect(screen.getByText('Choose a song from your library.')).toBeInTheDocument(); document.querySelectorAll('audio').forEach((audio) => expect(audio).not.toHaveAttribute('src'));
+  expect(await screen.findByText('Choose a song from your library.')).toBeInTheDocument(); document.querySelectorAll('audio').forEach((audio) => expect(audio).not.toHaveAttribute('src'));
 });
 
 test('keeps polling active jobs, loads completion, and refreshes the library', async () => {
@@ -95,5 +95,5 @@ test('keeps polling active jobs, loads completion, and refreshes the library', a
   render(<KaraokeApp />); await flushPromises(); fireEvent.click(screen.getByRole('tab', { name: 'Library' }));
   fireEvent.change(screen.getByPlaceholderText('Song title'), { target: { value: 'Test Song' } }); fireEvent.change(screen.getByPlaceholderText('Artist name'), { target: { value: 'Test Artist' } }); fireEvent.change(document.querySelector('input[type="file"]'), { target: { files: [new File(['audio'], 'song.mp3', { type: 'audio/mpeg' })] } }); fireEvent.click(screen.getByRole('button', { name: /generate karaoke track/i })); await flushPromises();
   for (let attempt = 0; attempt < 3; attempt += 1) await act(async () => { jest.advanceTimersByTime(2000); await Promise.resolve(); });
-  await flushPromises(); expect(getProcessingJob).toHaveBeenCalledTimes(3); expect(getSong).toHaveBeenCalledWith('song-1', expect.any(AbortSignal)); expect(await screen.findByText('Hello')).toBeInTheDocument(); expect(screen.getByText(/Test Artist — Test Song is ready to play/)).toBeInTheDocument(); expect(getLibraries).toHaveBeenCalledTimes(2);
+  await flushPromises(); expect(getProcessingJob).toHaveBeenCalledTimes(3); expect(getSong).toHaveBeenCalledWith('song-1', expect.any(AbortSignal)); expect(await within(screen.getByTestId('lyrics-display')).findByText('Hello')).toBeInTheDocument(); expect(screen.getByText(/Test Artist — Test Song is ready to play/)).toBeInTheDocument(); expect(getLibraries).toHaveBeenCalledTimes(2);
 });
