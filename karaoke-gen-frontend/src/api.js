@@ -97,6 +97,22 @@ export function getSong(songId, signal) {
   return authenticatedRequest(`/api/songs/${encodeURIComponent(songId)}/`, { signal });
 }
 
+export function getLibraries(signal) {
+  return authenticatedRequest('/api/libraries/', { signal });
+}
+
+export function updateSong(songId, changes) {
+  return authenticatedRequest(`/api/songs/${encodeURIComponent(songId)}/`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(changes),
+  });
+}
+
+export function deleteSong(songId) {
+  return authenticatedRequest(`/api/songs/${encodeURIComponent(songId)}/`, { method: 'DELETE' });
+}
+
 export function mediaUrl(value) {
   return value ? new URL(value, `${API_BASE_URL}/`).toString() : '';
 }
