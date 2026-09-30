@@ -1,0 +1,109 @@
+# AI Karaoke Generator — full stack.
+#
+#   cp .env.docker.example .env      # then fill in GENIUS_ACCESS_TOKEN etc.
+#   docker compose up --build        # CPU
+#   docker compose -f compose.yaml -f compose.gpu.yaml up --build   # NVIDIA GPU
+#
+# The app is served at http://localhost:${APP_PORT:-8080}.
+
+name: ai-karaoke-generator
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-karaoke}
+      POSTGRES_USER: ${POSTGRES_USER:-karaoke}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-karaoke}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  lyrics-align-service:
+    build:
+      context: ./lyrics-align-service
+      args:
+        TORCH_VARIANT: ${TORCH_VARIANT:-cpu}
+    image: ai-karaoke/lyrics-align-service:${TORCH_VARIANT:-cpu}
+    restart: unless-stopped
+    environment:
+      GENIUS_ACCESS_TOKEN: ${GENIUS_ACCESS_TOKEN:?Set GENIUS_ACCESS_TOKEN in .env}
+      GENIUS_TIMEOUT_SECONDS: ${GENIUS_TIMEOUT_SECONDS:-15}
+      GENIUS_RETRIES: ${GENIUS_RETRIES:-2}
+      GENIUS_SLEEP_TIME_SECONDS: ${GENIUS_SLEEP_TIME_SECONDS:-0.2}
+    volumes:
+      - align-runtime:/app/runtime
+      # Demucs/WhisperX/alignment weights; persisted so they download once.
+      - model-cache:/models
+    # Internal only; uncomment to reach the aligner directly for debugging.
+    # ports:
+    #   - "8001:8001"
+
+  karaoke-gen-service:
+    build:
+      context: ./karaoke-gen-service
+    image: ai-karaoke/karaoke-gen-service
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      lyrics-align-service:
+        condition: service_started
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-False}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,karaoke-gen-service}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080}
+      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://localhost:8080}
+      DJANGO_USE_X_FORWARDED_HOST: "True"
+      DJANGO_SECURE_PROXY_SSL_HEADER: ${DJANGO_SECURE_PROXY_SSL_HEADER:-False}
+      POSTGRES_DB: ${POSTGRES_DB:-karaoke}
+      POSTGRES_USER: ${POSTGRES_USER:-karaoke}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-karaoke}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      LYRICS_ALIGN_SERVICE_URL: http://lyrics-align-service:8001
+      LYRICS_ALIGN_REQUEST_TIMEOUT_SECONDS: ${LYRICS_ALIGN_REQUEST_TIMEOUT_SECONDS:-120}
+      LYRICS_ALIGN_JOB_TIMEOUT_SECONDS: ${LYRICS_ALIGN_JOB_TIMEOUT_SECONDS:-3600}
+      LYRICS_ALIGN_POLL_INTERVAL_SECONDS: ${LYRICS_ALIGN_POLL_INTERVAL_SECONDS:-2}
+      JWT_ACCESS_TOKEN_HOURS: ${JWT_ACCESS_TOKEN_HOURS:-24}
+      JWT_REFRESH_TOKEN_DAYS: ${JWT_REFRESH_TOKEN_DAYS:-30}
+      MEDIA_ROOT: /data/media
+      MEDIA_URL: /media/
+      STATIC_ROOT: /data/static
+      STATIC_URL: /django-static/
+    volumes:
+      - media:/data/media
+      - django-static:/data/static
+
+  karaoke-gen-frontend:
+    build:
+      context: ./karaoke-gen-frontend
+      args:
+        # Empty = same origin (nginx proxies the API).
+        REACT_APP_API_BASE_URL: ${REACT_APP_API_BASE_URL:-}
+    image: ai-karaoke/karaoke-gen-frontend
+    restart: unless-stopped
+    depends_on:
+      karaoke-gen-service:
+        condition: service_healthy
+    environment:
+      API_UPSTREAM: karaoke-gen-service:8000
+      NGINX_CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-200m}
+    ports:
+      - "${APP_PORT:-8080}:80"
+    volumes:
+      - media:/srv/media:ro
+      - django-static:/srv/django-static:ro
+
+volumes:
+  postgres-data:
+  align-runtime:
+  model-cache:
+  media:
+  django-static:

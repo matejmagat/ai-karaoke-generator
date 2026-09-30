@@ -1,0 +1,4 @@
+# Notebook tooling used by testing/*.ipynb; not installed in the Docker image.
+-r requirements.txt
+jupyterlab
+ipykernel
