@@ -1,0 +1,18 @@
+# NVIDIA GPU override for the lyrics alignment service.
+# Requires the NVIDIA driver and NVIDIA Container Toolkit on the host.
+#
+#   docker compose -f compose.yaml -f compose.gpu.yaml up --build
+
+services:
+  lyrics-align-service:
+    build:
+      args:
+        TORCH_VARIANT: cu128
+    image: ai-karaoke/lyrics-align-service:cu128
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

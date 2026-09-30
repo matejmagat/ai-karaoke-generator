@@ -1,0 +1,95 @@
+# ============================================================
+# Shared OS / editor files
+# ============================================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ============================================================
+# Lyrics align service
+# ============================================================
+/lyrics-align-service/runtime
+/lyrics-align-service/.env
+/lyrics-align-service/testing/input
+/lyrics-align-service/testing/output
+
+/lyrics-align-service/**/__pycache__/
+/lyrics-align-service/**/*.py[cod]
+/lyrics-align-service/**/.pytest_cache/
+/lyrics-align-service/**/.mypy_cache/
+/lyrics-align-service/**/.ruff_cache/
+/lyrics-align-service/**/.ipynb_checkpoints/
+
+# ============================================================
+# React frontend: frontend/
+# ============================================================
+
+# Dependencies and Yarn Plug'n'Play
+/karaoke-gen-frontend/node_modules/
+/karaoke-gen-frontend/.pnp
+/karaoke-gen-frontend/.pnp.js
+
+# Generated karaoke-gen-frontend artifacts
+/karaoke-gen-frontend/coverage/
+/karaoke-gen-frontend/build/
+/karaoke-gen-frontend/dist/
+
+# Frontend local configuration and secrets
+/karaoke-gen-frontend/.env
+/karaoke-gen-frontend/.env.*
+!/karaoke-gen-frontend/.env.example
+
+# Package-manager logs
+/karaoke-gen-frontend/npm-debug.log*
+/karaoke-gen-frontend/yarn-debug.log*
+/karaoke-gen-frontend/yarn-error.log*
+/karaoke-gen-frontend/pnpm-debug.log*
+
+# ============================================================
+# Django backend: backend/
+# ============================================================
+
+# Python bytecode and caches
+/karaoke-gen-service/**/__pycache__/
+/karaoke-gen-service/**/*.py[cod]
+/karaoke-gen-service/**/.pytest_cache/
+/karaoke-gen-service/**/.mypy_cache/
+/karaoke-gen-service/**/.ruff_cache/
+
+# Python virtual environments
+/karaoke-gen-service/.venv/
+/karaoke-gen-service/venv/
+/karaoke-gen-service/env/
+
+# Django/local application configuration and secrets
+/karaoke-gen-service/.env
+/karaoke-gen-service/.env.*
+!/karaoke-gen-service/.env.example
+/karaoke-gen-service/**/local_settings.py
+
+# Local SQLite database files
+/karaoke-gen-service/db.sqlite3
+/karaoke-gen-service/db.sqlite3-journal
+/karaoke-gen-service/*.sqlite3
+
+# Application logs
+/karaoke-gen-service/*.log
+/karaoke-gen-service/logs/
+
+# Test/coverage output
+/karaoke-gen-service/.coverage
+/karaoke-gen-service/.coverage.*
+/karaoke-gen-service/htmlcov/
+/karaoke-gen-service/coverage.xml
+
+# Generated Django deployment assets
+/karaoke-gen-service/staticfiles/
+
+# User uploads — ignore only if stored locally
+/karaoke-gen-service/media/
+
+# ============================================================
+# Docker Compose local configuration
+# ============================================================
+/.env
