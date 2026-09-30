@@ -8,13 +8,13 @@ const texts = (words) => words.map((word) => word.cue.text);
 
 beforeEach(() => localStorage.clear());
 
-test('defaults to horizontal, centered, 3 ahead and 1 behind', () => {
-  expect(DEFAULT_LYRICS_VIEW).toEqual({ scrolling: 'horizontal', static: false, ahead: 3, behind: 1 });
+test('defaults to horizontal, centered, 3 ahead, 1 behind and fading overflow', () => {
+  expect(DEFAULT_LYRICS_VIEW).toEqual({ scrolling: 'horizontal', static: false, ahead: 3, behind: 1, overflow: 'fade' });
   expect(normalizeLyricsView()).toEqual(DEFAULT_LYRICS_VIEW);
 });
 
 test('normalizes invalid settings', () => {
-  expect(normalizeLyricsView({ scrolling: 'diagonal', static: 'yes', ahead: -4, behind: '2' })).toEqual({ scrolling: 'horizontal', static: false, ahead: 0, behind: 2 });
+  expect(normalizeLyricsView({ scrolling: 'diagonal', static: 'yes', ahead: -4, behind: '2', overflow: 'scroll' })).toEqual({ scrolling: 'horizontal', static: false, ahead: 0, behind: 2, overflow: 'fade' });
   expect(normalizeLyricsView({ ahead: 99, behind: 'abc' })).toMatchObject({ ahead: 12, behind: 1 });
 });
 
@@ -48,12 +48,12 @@ test('renders the configured layout and seeks when a word is clicked', () => {
   const onSeek = jest.fn();
   const { rerender } = render(<LyricsDisplay lyrics={lyrics} currentCueIndex={5} settings={DEFAULT_LYRICS_VIEW} onSeek={onSeek} />);
   const display = screen.getByTestId('lyrics-display');
-  expect(display).toHaveClass('lyrics-horizontal', 'lyrics-centered');
+  expect(display).toHaveClass('lyrics-horizontal', 'lyrics-centered', 'lyrics-fade');
   expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['w4', 'w5', 'w6', 'w7', 'w8']);
   expect(screen.getByText('w5')).toHaveAttribute('aria-current', 'true');
   fireEvent.click(screen.getByText('w7')); expect(onSeek).toHaveBeenCalledWith(7);
-  rerender(<LyricsDisplay lyrics={lyrics} currentCueIndex={5} settings={{ scrolling: 'vertical', static: true, ahead: 1, behind: 0 }} onSeek={onSeek} />);
-  expect(screen.getByTestId('lyrics-display')).toHaveClass('lyrics-vertical', 'lyrics-static');
+  rerender(<LyricsDisplay lyrics={lyrics} currentCueIndex={5} settings={{ scrolling: 'vertical', static: true, ahead: 1, behind: 0, overflow: 'wrap' }} onSeek={onSeek} />);
+  expect(screen.getByTestId('lyrics-display')).toHaveClass('lyrics-vertical', 'lyrics-static', 'lyrics-wrap');
   expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['w4', 'w5']);
 });
 
@@ -67,6 +67,8 @@ test('settings controls emit normalized changes', () => {
   render(<LyricsSettings settings={DEFAULT_LYRICS_VIEW} onChange={onChange} onReset={onReset} />);
   fireEvent.click(screen.getByRole('radio', { name: 'Vertical' }));
   expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_LYRICS_VIEW, scrolling: 'vertical' });
+  fireEvent.click(screen.getByRole('radio', { name: 'Wrap' }));
+  expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_LYRICS_VIEW, overflow: 'wrap' });
   fireEvent.click(screen.getByLabelText('Static'));
   expect(onChange).toHaveBeenLastCalledWith({ ...DEFAULT_LYRICS_VIEW, static: true });
   fireEvent.change(screen.getByLabelText('Words ahead'), { target: { value: '5' } });
@@ -77,9 +79,12 @@ test('settings controls emit normalized changes', () => {
 });
 
 test('persists settings in localStorage', () => {
-  saveLyricsView({ scrolling: 'vertical', static: true, ahead: 4, behind: 2 });
-  expect(JSON.parse(localStorage.getItem(LYRICS_VIEW_STORAGE_KEY))).toEqual({ scrolling: 'vertical', static: true, ahead: 4, behind: 2 });
-  expect(loadLyricsView()).toEqual({ scrolling: 'vertical', static: true, ahead: 4, behind: 2 });
+  const saved = { scrolling: 'vertical', static: true, ahead: 4, behind: 2, overflow: 'wrap' };
+  saveLyricsView(saved);
+  expect(JSON.parse(localStorage.getItem(LYRICS_VIEW_STORAGE_KEY))).toEqual(saved);
+  expect(loadLyricsView()).toEqual(saved);
+  localStorage.setItem(LYRICS_VIEW_STORAGE_KEY, JSON.stringify({ scrolling: 'vertical', static: true, ahead: 4, behind: 2 }));
+  expect(loadLyricsView()).toEqual({ ...saved, overflow: 'fade' });
   localStorage.setItem(LYRICS_VIEW_STORAGE_KEY, '{not json');
   expect(loadLyricsView()).toEqual(DEFAULT_LYRICS_VIEW);
 });

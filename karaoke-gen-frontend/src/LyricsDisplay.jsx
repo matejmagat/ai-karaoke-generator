@@ -7,9 +7,11 @@ export const DEFAULT_LYRICS_VIEW = Object.freeze({
   static: false,
   ahead: 3,
   behind: 1,
+  overflow: 'fade',
 });
 
 const SCROLLING_MODES = ['horizontal', 'vertical'];
+const OVERFLOW_MODES = ['fade', 'wrap'];
 const toWordCount = (value, fallback) => {
   const number = Math.floor(Number(value));
   if (!Number.isFinite(number)) return fallback;
@@ -24,6 +26,7 @@ export function normalizeLyricsView(settings = {}) {
     static: typeof source.static === 'boolean' ? source.static : DEFAULT_LYRICS_VIEW.static,
     ahead: toWordCount(source.ahead, DEFAULT_LYRICS_VIEW.ahead),
     behind: toWordCount(source.behind, DEFAULT_LYRICS_VIEW.behind),
+    overflow: OVERFLOW_MODES.includes(source.overflow) ? source.overflow : DEFAULT_LYRICS_VIEW.overflow,
   };
 }
 
@@ -92,7 +95,7 @@ function Word({ word, currentIndex, onSeek }) {
 export default function LyricsDisplay({ lyrics, currentCueIndex, settings, onSeek }) {
   const view = normalizeLyricsView(settings);
   const { before, current, after, words } = getLyricWindow(lyrics, currentCueIndex, view);
-  const layoutClass = `lyrics-display lyrics-${view.scrolling} ${view.static ? 'lyrics-static' : 'lyrics-centered'}`;
+  const layoutClass = `lyrics-display lyrics-${view.scrolling} ${view.static ? 'lyrics-static' : 'lyrics-centered'} lyrics-${view.overflow}`;
 
   if (!current) {
     return (
@@ -116,7 +119,7 @@ export default function LyricsDisplay({ lyrics, currentCueIndex, settings, onSee
   return (
     <div className={layoutClass} aria-live="polite" data-testid="lyrics-display">
       <div className="lyric-context lyric-behind">
-        {before.map((word) => <Word key={`${word.cue.id}-${word.index}`} word={word} currentIndex={current.index} onSeek={onSeek} />)}
+        {[...before].reverse().map((word) => <Word key={`${word.cue.id}-${word.index}`} word={word} currentIndex={current.index} onSeek={onSeek} />)}
       </div>
       <Word word={current} currentIndex={current.index} onSeek={onSeek} />
       <div className="lyric-context lyric-ahead">
@@ -138,6 +141,16 @@ export function LyricsSettings({ settings, onChange, onReset }) {
           {SCROLLING_MODES.map((mode) => (
             <button key={mode} type="button" role="radio" aria-checked={view.scrolling === mode} className={view.scrolling === mode ? 'selected' : ''} onClick={() => update({ scrolling: mode })}>
               {mode === 'horizontal' ? 'Horizontal' : 'Vertical'}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="setting-row">
+        <span className="level-label">Overflow</span>
+        <div className="segmented" role="radiogroup" aria-label="Lyric overflow">
+          {OVERFLOW_MODES.map((mode) => (
+            <button key={mode} type="button" role="radio" aria-checked={view.overflow === mode} className={view.overflow === mode ? 'selected' : ''} onClick={() => update({ overflow: mode })}>
+              {mode === 'fade' ? 'Fade' : 'Wrap'}
             </button>
           ))}
         </div>
