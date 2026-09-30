@@ -1,4 +1,6 @@
-# Install PyTorch separately when CUDA support is required.
+# Runtime dependencies for the lyrics alignment API.
+# The Docker image installs torch/torchaudio/torchvision first from the PyTorch
+# wheel index (CPU or CUDA); install them separately locally when CUDA is needed.
 torch
 torchaudio
 
@@ -6,11 +8,11 @@ demucs
 whisperx
 lyricsgenius
 python-dotenv
-jupyterlab
-ipykernel
 librosa
 numpy
 pyloudnorm
 soundfile
 fastapi
 pydantic
+uvicorn[standard]
+python-multipart
