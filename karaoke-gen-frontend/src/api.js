@@ -1,7 +1,10 @@
 const DEFAULT_API_BASE_URL = 'http://localhost:8000';
 const SESSION_KEY = 'karaoke-gen-session';
 
-export const API_BASE_URL = (process.env.REACT_APP_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/$/, '');
+// An explicitly empty REACT_APP_API_BASE_URL means "same origin": the Docker
+// image serves the app behind nginx, which proxies /api/ and /media/.
+const configuredApiBaseUrl = process.env.REACT_APP_API_BASE_URL;
+export const API_BASE_URL = (configuredApiBaseUrl ?? DEFAULT_API_BASE_URL).replace(/\/$/, '');
 
 export function loadSession() {
   try {
@@ -114,5 +117,5 @@ export function deleteSong(songId) {
 }
 
 export function mediaUrl(value) {
-  return value ? new URL(value, `${API_BASE_URL}/`).toString() : '';
+  return value ? new URL(value, `${API_BASE_URL || window.location.origin}/`).toString() : '';
 }
