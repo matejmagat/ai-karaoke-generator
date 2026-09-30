@@ -88,3 +88,8 @@ Thumbs.db
 
 # User uploads — ignore only if stored locally
 /karaoke-gen-service/media/
+
+# ============================================================
+# Docker Compose local configuration
+# ============================================================
+/.env

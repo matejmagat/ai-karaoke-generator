@@ -1,5 +1,7 @@
 # Frontend integration
 
+> Prefer containers? See [DOCKER.md](DOCKER.md) to run the whole stack with `docker compose up`.
+
 The React app submits a full-mix audio file to Django. Django delegates separation and alignment to `lyrics-align-service`, imports the generated instrumental, vocals, and SRT files, and exposes them to the player.
 
 ## Local setup
@@ -10,7 +12,7 @@ The React app submits a full-mix audio file to Django. Django delegates separati
 cd lyrics-align-service
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt   # or requirements-dev.txt for the notebooks
 cp .env.example .env
 # Set GENIUS_ACCESS_TOKEN in .env when the lyrics pipeline requires it.
 uvicorn src.api.main:app --host 127.0.0.1 --port 8001 --reload
